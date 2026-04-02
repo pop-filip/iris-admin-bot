@@ -6,7 +6,7 @@ import cron from 'node-cron';
 import Anthropic from '@anthropic-ai/sdk';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { searchProducts, countProducts, listProducts, addProduct, updateProduct, deleteProduct, getProductBySku, getCategories, logAudit, getAuditLog, exportProducts, findMissingData, getFeatured, setFeatured, getMarginReport, updateBuyPrice, addSupplier, listSuppliers, getSupplierByName, linkProductSupplier, getSupplierReport, addPriceRule, listPriceRules, deletePriceRule, applyPriceRules, getLowMarginProducts, updateSupplierFeed, getSuppliersWithFeed, syncSupplierFeed, executeSmartImport, getDailySummary, addOemNumber, searchByOem, listOemNumbers, removeOemNumber, setAlternative, getAlternatives, autoFindAlternatives, findByVehicle, getCompatibleMakes, setShippingInfo, getHazmatList, getShippingReport } from './db/database.js';
+import { searchProducts, countProducts, listProducts, addProduct, updateProduct, deleteProduct, getProductBySku, getCategories, logAudit, getAuditLog, exportProducts, findMissingData, getFeatured, setFeatured, getMarginReport, updateBuyPrice, addSupplier, listSuppliers, getSupplierByName, linkProductSupplier, getSupplierReport, addPriceRule, listPriceRules, deletePriceRule, applyPriceRules, getLowMarginProducts, updateSupplierFeed, getSuppliersWithFeed, syncSupplierFeed, executeSmartImport, getDailySummary, addOemNumber, searchByOem, listOemNumbers, removeOemNumber, setAlternative, getAlternatives, autoFindAlternatives, findByVehicle, getCompatibleMakes, setShippingInfo, getHazmatList, getShippingReport, addOrder, getOrder, listOrders, updateOrderStatus, setTracking, getOrderStats, listUnshipped } from './db/database.js';
 import { sendTelegram, formatOosAlert, formatPriceAlert } from './notify.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -557,6 +557,98 @@ const ADMIN_TOOLS = [
     input_schema: { type: 'object', properties: {} }
   },
 
+  // ── Order Management ─────────────────────────────────────────────────────
+  {
+    name: 'add_order',
+    description: 'Dodaj novu narudžbu ručno. Koristi kad narudžba dođe van automatskog chekcouta (telefon, email, WhatsApp).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        customer_name:    { type: 'string', description: 'Ime i prezime kupca' },
+        customer_email:   { type: 'string', description: 'Email kupca' },
+        customer_address: { type: 'string', description: 'Adresa dostave' },
+        items: {
+          type: 'array',
+          description: 'Lista artikala u narudžbi',
+          items: {
+            type: 'object',
+            properties: {
+              sku:       { type: 'string' },
+              name:      { type: 'string' },
+              qty:       { type: 'number' },
+              price:     { type: 'number', description: 'Prodajna cijena po komadu' },
+              buy_price: { type: 'number', description: 'Nabavna cijena po komadu' }
+            }
+          }
+        },
+        shipping_cost: { type: 'number', description: 'Cijena dostave' },
+        supplier_id:   { type: 'number', description: 'ID dobavljača za ovu narudžbu' },
+        notes:         { type: 'string', description: 'Interne napomene' }
+      },
+      required: ['customer_name', 'items']
+    }
+  },
+  {
+    name: 'list_orders',
+    description: 'Prikaži narudžbe. Može filtrirati po statusu: new, forwarded, shipped, delivered, cancelled.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: 'Filter po statusu (opcionalno)' },
+        search: { type: 'string', description: 'Pretraži po imenu/emailu kupca ili broju narudžbe' },
+        limit:  { type: 'number', description: 'Maks broj rezultata (default 20)' }
+      }
+    }
+  },
+  {
+    name: 'get_order',
+    description: 'Prikaži detalje jedne narudžbe po broju (ORD-2026-0001) ili ID-u.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        identifier: { type: 'string', description: 'Broj narudžbe (ORD-2026-0001) ili numerički ID' }
+      },
+      required: ['identifier']
+    }
+  },
+  {
+    name: 'update_order_status',
+    description: 'Promijeni status narudžbe. Statusi: new → forwarded → shipped → delivered (ili cancelled).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        identifier:        { type: 'string', description: 'Broj ili ID narudžbe' },
+        status:            { type: 'string', description: 'Novi status: new | forwarded | shipped | delivered | cancelled' },
+        supplier_order_ref:{ type: 'string', description: 'Referentni broj narudžbe kod dobavljača' },
+        notes:             { type: 'string', description: 'Napomena uz promjenu statusa' }
+      },
+      required: ['identifier', 'status']
+    }
+  },
+  {
+    name: 'set_tracking',
+    description: 'Postavi tracking broj za narudžbu. Automatski mijenja status u "shipped".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        identifier:      { type: 'string', description: 'Broj ili ID narudžbe' },
+        tracking_number: { type: 'string', description: 'Tracking broj (npr. 1Z999AA10123456784)' },
+        carrier:         { type: 'string', description: 'Dostavljač: DPD | DHL | GLS | Österreichische Post | ostalo' }
+      },
+      required: ['identifier', 'tracking_number']
+    }
+  },
+  {
+    name: 'order_stats',
+    description: 'Prikaži statistiku narudžbi: ukupan prihod, profit, broj po statusu, stare neobrađene narudžbe.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'list_unshipped',
+    description: 'Prikaži sve narudžbe koje još nisu otpremljene (status: new ili forwarded).',
+    input_schema: { type: 'object', properties: {} }
+  },
+
   // ── Alerts & Monitoring ───────────────────────────────────────────────────
   {
     name: 'send_summary',
@@ -912,6 +1004,81 @@ async function handleAdminTool(name, input) {
     }
     case 'shipping_report': {
       return getShippingReport();
+    }
+
+    // ── Order Management ────────────────────────────────────────────────────
+    case 'add_order': {
+      try {
+        const result = addOrder(input);
+        return { success: true, ...result, message: `Narudžba ${result.order_number} kreirana. Prihod: €${result.total_sell.toFixed(2)}, Profit: €${result.profit.toFixed(2)}` };
+      } catch(e) { return { success: false, error: e.message }; }
+    }
+    case 'list_orders': {
+      const orders = listOrders({ status: input.status, search: input.search, limit: input.limit || 20 });
+      if (!orders.length) return { count: 0, message: 'Nema narudžbi za zadane kriterije.' };
+      return {
+        count: orders.length,
+        orders: orders.map(o => ({
+          order_number: o.order_number,
+          customer:     o.customer_name,
+          status:       o.status,
+          items:        o.items.length,
+          total:        `€${(o.total_sell||0).toFixed(2)}`,
+          profit:       `€${(o.profit||0).toFixed(2)}`,
+          tracking:     o.tracking_number || '—',
+          date:         o.created_at?.split('T')[0]
+        }))
+      };
+    }
+    case 'get_order': {
+      const order = getOrder(input.identifier);
+      if (!order) return { error: `Narudžba '${input.identifier}' ne postoji.` };
+      return {
+        ...order,
+        items_summary: order.items.map(i => `${i.qty}× ${i.name} (${i.sku}) — €${i.price}`).join('\n')
+      };
+    }
+    case 'update_order_status': {
+      try {
+        const extra = {};
+        if (input.supplier_order_ref) extra.supplier_order_ref = input.supplier_order_ref;
+        if (input.notes) extra.notes = input.notes;
+        const order = updateOrderStatus(input.identifier, input.status, extra);
+        return { success: true, message: `Narudžba ${order.order_number} → status: ${input.status}` };
+      } catch(e) { return { success: false, error: e.message }; }
+    }
+    case 'set_tracking': {
+      try {
+        const order = setTracking(input.identifier, input.tracking_number, input.carrier || '');
+        return {
+          success: true,
+          message: `Tracking za ${order.order_number}: ${input.tracking_number} (${input.carrier || 'nepoznat carrier'}) — status → shipped`
+        };
+      } catch(e) { return { success: false, error: e.message }; }
+    }
+    case 'order_stats': {
+      const stats = getOrderStats();
+      return {
+        ...stats,
+        total_revenue_fmt: `€${stats.total_revenue.toFixed(2)}`,
+        total_profit_fmt:  `€${stats.total_profit.toFixed(2)}`,
+        warning: stats.unshipped_old > 0 ? `⚠️ ${stats.unshipped_old} narudžbi čeka otpremu duže od 3 dana!` : null
+      };
+    }
+    case 'list_unshipped': {
+      const orders = listUnshipped();
+      if (!orders.length) return { count: 0, message: '✅ Sve narudžbe su otpremljene.' };
+      return {
+        count: orders.length,
+        orders: orders.map(o => ({
+          order_number: o.order_number,
+          customer:     o.customer_name,
+          status:       o.status,
+          total:        `€${(o.total_sell||0).toFixed(2)}`,
+          days_waiting: Math.floor((Date.now() - new Date(o.created_at)) / 86400000),
+          date:         o.created_at?.split('T')[0]
+        }))
+      };
     }
 
     // ── Alerts & Monitoring ─────────────────────────────────────────────────

@@ -100,6 +100,30 @@ function initSchema() {
       detail     TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS orders (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_number       TEXT UNIQUE NOT NULL,
+      customer_name      TEXT,
+      customer_email     TEXT,
+      customer_address   TEXT,
+      items              TEXT NOT NULL,
+      total_sell         REAL DEFAULT 0,
+      total_buy          REAL DEFAULT 0,
+      shipping_cost      REAL DEFAULT 0,
+      profit             REAL DEFAULT 0,
+      status             TEXT DEFAULT 'new',
+      supplier_id        INTEGER REFERENCES suppliers(id),
+      supplier_order_ref TEXT,
+      tracking_number    TEXT,
+      carrier            TEXT,
+      notes              TEXT,
+      created_at         TEXT DEFAULT (datetime('now')),
+      updated_at         TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+    CREATE INDEX IF NOT EXISTS idx_orders_email  ON orders(customer_email);
   `);
 }
 
@@ -634,5 +658,92 @@ export function findMissingData() {
        OR url IS NULL OR url = ''
        OR makes IS NULL OR makes = ''
     ORDER BY category, name
+  `).all();
+}
+
+// ── Orders ─────────────────────────────────────────────────────────────────────
+
+function generateOrderNumber() {
+  const year = new Date().getFullYear();
+  const db = getDb();
+  const last = db.prepare(`SELECT order_number FROM orders WHERE order_number LIKE 'ORD-${year}-%' ORDER BY id DESC LIMIT 1`).get();
+  const seq = last ? parseInt(last.order_number.split('-')[2]) + 1 : 1;
+  return `ORD-${year}-${String(seq).padStart(4, '0')}`;
+}
+
+export function addOrder({ customer_name, customer_email, customer_address, items, shipping_cost = 0, supplier_id = null, notes = '' }) {
+  const db = getDb();
+  const order_number = generateOrderNumber();
+
+  // items = [{sku, name, qty, price, buy_price}]
+  const parsedItems = typeof items === 'string' ? JSON.parse(items) : items;
+  const total_sell = parsedItems.reduce((s, i) => s + (i.price * i.qty), 0);
+  const total_buy  = parsedItems.reduce((s, i) => s + ((i.buy_price || 0) * i.qty), 0);
+  const profit = total_sell - total_buy - shipping_cost;
+
+  const result = db.prepare(`
+    INSERT INTO orders (order_number, customer_name, customer_email, customer_address, items, total_sell, total_buy, shipping_cost, profit, supplier_id, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(order_number, customer_name, customer_email, customer_address, JSON.stringify(parsedItems), total_sell, total_buy, shipping_cost, profit, supplier_id, notes);
+
+  logAudit('ORDER_NEW', order_number, customer_name || 'Unknown', `${parsedItems.length} items, €${total_sell.toFixed(2)}`);
+  return { id: result.lastInsertRowid, order_number, total_sell, total_buy, profit };
+}
+
+export function getOrder(identifier) {
+  const db = getDb();
+  const order = /^\d+$/.test(String(identifier))
+    ? db.prepare('SELECT * FROM orders WHERE id = ?').get(identifier)
+    : db.prepare('SELECT * FROM orders WHERE order_number = ?').get(identifier);
+  if (!order) return null;
+  order.items = JSON.parse(order.items || '[]');
+  return order;
+}
+
+export function listOrders({ status = null, limit = 20, search = '' } = {}) {
+  const db = getDb();
+  let sql = 'SELECT * FROM orders WHERE 1=1';
+  const params = [];
+  if (status) { sql += ' AND status = ?'; params.push(status); }
+  if (search) { sql += ' AND (customer_name LIKE ? OR customer_email LIKE ? OR order_number LIKE ?)'; params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+  sql += ' ORDER BY created_at DESC LIMIT ?';
+  params.push(limit);
+  return db.prepare(sql).all(...params).map(o => ({ ...o, items: JSON.parse(o.items || '[]') }));
+}
+
+export function updateOrderStatus(identifier, status, extra = {}) {
+  const db = getDb();
+  const allowed = ['new', 'forwarded', 'shipped', 'delivered', 'cancelled'];
+  if (!allowed.includes(status)) throw new Error(`Nevalidan status: ${status}. Dozvoljeno: ${allowed.join(', ')}`);
+
+  const fields = { status, updated_at: new Date().toISOString(), ...extra };
+  const set = Object.keys(fields).map(k => `${k} = ?`).join(', ');
+  const vals = Object.values(fields);
+
+  const where = /^\d+$/.test(String(identifier)) ? 'id = ?' : 'order_number = ?';
+  db.prepare(`UPDATE orders SET ${set} WHERE ${where}`).run(...vals, identifier);
+
+  const order = getOrder(identifier);
+  if (order) logAudit('ORDER_STATUS', order.order_number, order.customer_name || '', status);
+  return order;
+}
+
+export function setTracking(identifier, tracking_number, carrier = '') {
+  return updateOrderStatus(identifier, 'shipped', { tracking_number, carrier });
+}
+
+export function getOrderStats() {
+  const db = getDb();
+  const byStatus = db.prepare(`SELECT status, COUNT(*) as count FROM orders GROUP BY status`).all();
+  const revenue  = db.prepare(`SELECT COALESCE(SUM(total_sell), 0) as total FROM orders WHERE status != 'cancelled'`).get().total;
+  const profit   = db.prepare(`SELECT COALESCE(SUM(profit), 0) as total FROM orders WHERE status != 'cancelled'`).get().total;
+  const unshipped = db.prepare(`SELECT COUNT(*) as n FROM orders WHERE status IN ('new','forwarded') AND created_at < datetime('now', '-3 days')`).get().n;
+  return { by_status: byStatus, total_revenue: revenue, total_profit: profit, unshipped_old: unshipped };
+}
+
+export function listUnshipped() {
+  return getDb().prepare(`
+    SELECT id, order_number, customer_name, customer_email, status, total_sell, created_at
+    FROM orders WHERE status IN ('new','forwarded') ORDER BY created_at ASC
   `).all();
 }
