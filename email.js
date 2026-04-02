@@ -112,3 +112,155 @@ export function buildSupplierOrderEmail(order, supplier) {
 
   return { subject, html };
 }
+
+// ── Customer: Order Confirmation ──────────────────────────────────────────────
+export function buildOrderConfirmationEmail(order) {
+  const shopName   = process.env.SHOP_NAME   || 'Iris Shop';
+  const shopDomain = process.env.SHOP_DOMAIN || 'localhost';
+  const shopEmail  = process.env.SMTP_FROM   || process.env.SMTP_USER || '';
+
+  const itemsRows = order.items.map(i => `
+    <tr>
+      <td style="padding:8px 12px;border:1px solid #eee;">${i.name}</td>
+      <td style="padding:8px 12px;border:1px solid #eee;text-align:center;">${i.qty}</td>
+      <td style="padding:8px 12px;border:1px solid #eee;text-align:right;">€${(i.price * i.qty).toFixed(2)}</td>
+    </tr>`).join('');
+
+  const subject = `Ihre Bestellung ${order.order_number} — ${shopName}`;
+
+  const html = `
+<!DOCTYPE html>
+<html lang="de">
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:0 auto;padding:20px;">
+
+  <div style="background:#1a1a2e;padding:16px 24px;border-radius:8px 8px 0 0;">
+    <h1 style="color:#f0a500;margin:0;font-size:20px;">🔧 ${shopName}</h1>
+    <p style="color:#aaa;margin:4px 0 0;font-size:13px;">${shopDomain}</p>
+  </div>
+
+  <div style="border:1px solid #ddd;border-top:none;padding:24px;border-radius:0 0 8px 8px;">
+
+    <div style="background:#e8f5e9;border:1px solid #c8e6c9;border-radius:6px;padding:14px 18px;margin-bottom:20px;">
+      <p style="margin:0;font-size:16px;color:#2e7d32;">✅ Vielen Dank für Ihre Bestellung!</p>
+      <p style="margin:6px 0 0;font-size:13px;color:#555;">Bestellnummer: <strong>${order.order_number}</strong></p>
+    </div>
+
+    <p>Sehr geehrte${order.customer_name ? ` ${order.customer_name}` : ''},</p>
+    <p>wir haben Ihre Bestellung erhalten und bearbeiten sie so schnell wie möglich.</p>
+
+    <h3 style="font-size:15px;margin:20px 0 8px;color:#555;">📦 Ihre Bestellung</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:14px;">
+      <thead>
+        <tr style="background:#f5f5f5;">
+          <th style="padding:8px 12px;border:1px solid #eee;text-align:left;">Artikel</th>
+          <th style="padding:8px 12px;border:1px solid #eee;text-align:center;">Menge</th>
+          <th style="padding:8px 12px;border:1px solid #eee;text-align:right;">Preis</th>
+        </tr>
+      </thead>
+      <tbody>${itemsRows}</tbody>
+      <tfoot>
+        <tr style="font-weight:bold;background:#f9f9f9;">
+          <td colspan="2" style="padding:8px 12px;border:1px solid #eee;">Gesamt</td>
+          <td style="padding:8px 12px;border:1px solid #eee;text-align:right;">€${(order.total_sell || 0).toFixed(2)}</td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <h3 style="font-size:15px;margin:20px 0 8px;color:#555;">🚚 Lieferadresse</h3>
+    <div style="background:#f9f9f9;padding:12px 16px;border-radius:6px;border:1px solid #eee;font-size:14px;line-height:1.6;">
+      ${(order.customer_address || 'Adresse nicht angegeben').replace(/\n/g, '<br>')}
+    </div>
+
+    <div style="margin-top:24px;padding:14px 18px;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;font-size:13px;">
+      <p style="margin:0;"><strong>Was passiert als nächstes?</strong></p>
+      <p style="margin:8px 0 0;">Wir bearbeiten Ihre Bestellung und schicken Ihnen eine E-Mail mit der Sendungsverfolgungsnummer, sobald Ihr Paket auf dem Weg ist.</p>
+    </div>
+
+    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;font-size:13px;color:#777;">
+      <p>Bei Fragen antworten Sie einfach auf diese E-Mail.</p>
+      <p style="margin-top:8px;">
+        Mit freundlichen Grüßen,<br>
+        <strong>${shopName}</strong><br>
+        ${shopEmail ? `<a href="mailto:${shopEmail}" style="color:#f0a500;">${shopEmail}</a>` : ''}
+      </p>
+    </div>
+
+  </div>
+
+  <p style="text-align:center;font-size:11px;color:#bbb;margin-top:12px;">
+    Automatisch generiert — ${new Date().toLocaleDateString('de-AT')}
+  </p>
+
+</body>
+</html>`;
+
+  return { subject, html };
+}
+
+// ── Customer: Shipping Notification ──────────────────────────────────────────
+export function buildShippingNotificationEmail(order) {
+  const shopName   = process.env.SHOP_NAME   || 'Iris Shop';
+  const shopDomain = process.env.SHOP_DOMAIN || 'localhost';
+  const shopEmail  = process.env.SMTP_FROM   || process.env.SMTP_USER || '';
+
+  const carrierLinks = {
+    'DPD':                   `https://tracking.dpd.de/status/de_DE/parcel/${order.tracking_number}`,
+    'DHL':                   `https://www.dhl.de/de/privatkunden/pakete-empfangen/verfolgen.html?idc=${order.tracking_number}`,
+    'GLS':                   `https://gls-group.eu/track/${order.tracking_number}`,
+    'Österreichische Post':   `https://www.post.at/sendungsdetails?sendungsnummer=${order.tracking_number}`,
+  };
+  const trackingUrl = carrierLinks[order.carrier] || null;
+
+  const subject = `Ihre Bestellung ${order.order_number} wurde versendet — ${shopName}`;
+
+  const html = `
+<!DOCTYPE html>
+<html lang="de">
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:0 auto;padding:20px;">
+
+  <div style="background:#1a1a2e;padding:16px 24px;border-radius:8px 8px 0 0;">
+    <h1 style="color:#f0a500;margin:0;font-size:20px;">🔧 ${shopName}</h1>
+    <p style="color:#aaa;margin:4px 0 0;font-size:13px;">${shopDomain}</p>
+  </div>
+
+  <div style="border:1px solid #ddd;border-top:none;padding:24px;border-radius:0 0 8px 8px;">
+
+    <div style="background:#e3f2fd;border:1px solid #bbdefb;border-radius:6px;padding:14px 18px;margin-bottom:20px;">
+      <p style="margin:0;font-size:16px;color:#1565c0;">📦 Ihr Paket ist unterwegs!</p>
+      <p style="margin:6px 0 0;font-size:13px;color:#555;">Bestellnummer: <strong>${order.order_number}</strong></p>
+    </div>
+
+    <p>Sehr geehrte${order.customer_name ? ` ${order.customer_name}` : ''},</p>
+    <p>Ihre Bestellung wurde versendet und ist auf dem Weg zu Ihnen.</p>
+
+    <div style="background:#f5f5f5;border-radius:8px;padding:20px;margin:20px 0;text-align:center;">
+      <p style="margin:0 0 8px;font-size:13px;color:#777;">Sendungsnummer${order.carrier ? ` (${order.carrier})` : ''}</p>
+      <p style="margin:0;font-size:22px;font-weight:bold;letter-spacing:2px;color:#1a1a2e;">${order.tracking_number}</p>
+      ${trackingUrl ? `
+      <a href="${trackingUrl}" style="display:inline-block;margin-top:16px;padding:10px 24px;background:#f0a500;color:#fff;text-decoration:none;border-radius:6px;font-size:14px;font-weight:bold;">
+        Sendung verfolgen →
+      </a>` : ''}
+    </div>
+
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid #eee;font-size:13px;color:#777;">
+      <p>Bei Fragen zu Ihrer Sendung antworten Sie auf diese E-Mail.</p>
+      <p style="margin-top:8px;">
+        Mit freundlichen Grüßen,<br>
+        <strong>${shopName}</strong><br>
+        ${shopEmail ? `<a href="mailto:${shopEmail}" style="color:#f0a500;">${shopEmail}</a>` : ''}
+      </p>
+    </div>
+
+  </div>
+
+  <p style="text-align:center;font-size:11px;color:#bbb;margin-top:12px;">
+    Automatisch generiert — ${new Date().toLocaleDateString('de-AT')}
+  </p>
+
+</body>
+</html>`;
+
+  return { subject, html };
+}

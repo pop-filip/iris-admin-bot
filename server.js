@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { searchProducts, countProducts, listProducts, addProduct, updateProduct, deleteProduct, getProductBySku, getCategories, logAudit, getAuditLog, exportProducts, findMissingData, getFeatured, setFeatured, getMarginReport, updateBuyPrice, addSupplier, listSuppliers, getSupplierByName, linkProductSupplier, getSupplierReport, addPriceRule, listPriceRules, deletePriceRule, applyPriceRules, getLowMarginProducts, updateSupplierFeed, getSuppliersWithFeed, syncSupplierFeed, executeSmartImport, getDailySummary, addOemNumber, searchByOem, listOemNumbers, removeOemNumber, setAlternative, getAlternatives, autoFindAlternatives, findByVehicle, getCompatibleMakes, setShippingInfo, getHazmatList, getShippingReport, addOrder, getOrder, listOrders, updateOrderStatus, setTracking, getOrderStats, listUnshipped } from './db/database.js';
 import { sendTelegram, formatOosAlert, formatPriceAlert } from './notify.js';
-import { sendEmail, buildSupplierOrderEmail } from './email.js';
+import { sendEmail, buildSupplierOrderEmail, buildOrderConfirmationEmail, buildShippingNotificationEmail } from './email.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -656,6 +656,19 @@ const ADMIN_TOOLS = [
   },
 
   {
+    name: 'resend_customer_email',
+    description: 'Ručno pošalji ili ponovo pošalji email kupcu. Tip: "confirmation" = potvrda narudžbe, "shipping" = tracking broj (zahtijeva da narudžba ima tracking_number).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        order_number: { type: 'string', description: 'Broj narudžbe (ORD-2026-0001)' },
+        type:         { type: 'string', description: '"confirmation" ili "shipping"', enum: ['confirmation', 'shipping'] }
+      },
+      required: ['order_number', 'type']
+    }
+  },
+
+  {
     name: 'forward_to_supplier',
     description: 'Pošalji narudžbu dobavljaču emailom. Automatski mijenja status u "forwarded". Koristi kad treba proslijediti narudžbu.',
     input_schema: {
@@ -1030,7 +1043,20 @@ async function handleAdminTool(name, input) {
     case 'add_order': {
       try {
         const result = addOrder(input);
-        return { success: true, ...result, message: `Narudžba ${result.order_number} kreirana. Prihod: €${result.total_sell.toFixed(2)}, Profit: €${result.profit.toFixed(2)}` };
+        const response = { success: true, ...result, message: `Narudžba ${result.order_number} kreirana. Prihod: €${result.total_sell.toFixed(2)}, Profit: €${result.profit.toFixed(2)}` };
+
+        // Auto-pošalji potvrdu kupcu ako ima email
+        if (input.customer_email) {
+          const order = getOrder(result.order_number);
+          const { subject, html } = buildOrderConfirmationEmail(order);
+          const emailResult = await sendEmail(input.customer_email, subject, html);
+          response.confirmation_email = emailResult.ok
+            ? `✅ Potvrda poslana na ${input.customer_email}`
+            : `⚠️ Email nije poslan: ${emailResult.reason}`;
+          if (emailResult.ok) logAudit('EMAIL_CONFIRM', result.order_number, input.customer_name || '', input.customer_email);
+        }
+
+        return response;
       } catch(e) { return { success: false, error: e.message }; }
     }
     case 'list_orders': {
@@ -1070,10 +1096,24 @@ async function handleAdminTool(name, input) {
     case 'set_tracking': {
       try {
         const order = setTracking(input.identifier, input.tracking_number, input.carrier || '');
-        return {
+        const response = {
           success: true,
           message: `Tracking za ${order.order_number}: ${input.tracking_number} (${input.carrier || 'nepoznat carrier'}) — status → shipped`
         };
+
+        // Auto-pošalji shipping notifikaciju kupcu ako ima email
+        if (order.customer_email) {
+          const { subject, html } = buildShippingNotificationEmail(order);
+          const emailResult = await sendEmail(order.customer_email, subject, html);
+          response.shipping_email = emailResult.ok
+            ? `✅ Shipping notifikacija poslana na ${order.customer_email}`
+            : `⚠️ Email nije poslan: ${emailResult.reason}`;
+          if (emailResult.ok) logAudit('EMAIL_SHIPPING', order.order_number, order.customer_name || '', order.customer_email);
+        } else {
+          response.shipping_email = '⚠️ Kupac nema email — notifikacija nije poslana.';
+        }
+
+        return response;
       } catch(e) { return { success: false, error: e.message }; }
     }
     case 'order_stats': {
@@ -1119,6 +1159,25 @@ async function handleAdminTool(name, input) {
         tip: inStock.length - withImg > 0 ? `⚠️ ${inStock.length - withImg} proizvoda nema sliku — Google Shopping zahtijeva sliku za svaki artikl.` : '✅ Svi proizvodi imaju sliku.'
       };
     }
+    case 'resend_customer_email': {
+      const order = getOrder(input.order_number);
+      if (!order) return { success: false, error: `Narudžba '${input.order_number}' ne postoji.` };
+      if (!order.customer_email) return { success: false, error: 'Narudžba nema email kupca. Dodaj ga sa update_order_status.' };
+
+      let subject, html;
+      if (input.type === 'confirmation') {
+        ({ subject, html } = buildOrderConfirmationEmail(order));
+      } else if (input.type === 'shipping') {
+        if (!order.tracking_number) return { success: false, error: 'Narudžba nema tracking broj. Postavi ga sa set_tracking.' };
+        ({ subject, html } = buildShippingNotificationEmail(order));
+      }
+
+      const result = await sendEmail(order.customer_email, subject, html);
+      if (!result.ok) return { success: false, error: `Email nije poslan: ${result.reason}` };
+      logAudit(`EMAIL_RESEND_${input.type.toUpperCase()}`, order.order_number, order.customer_name || '', order.customer_email);
+      return { success: true, message: `✅ ${input.type === 'confirmation' ? 'Potvrda' : 'Shipping notifikacija'} ponovo poslana na ${order.customer_email}` };
+    }
+
     case 'forward_to_supplier': {
       const order = getOrder(input.order_number);
       if (!order) return { success: false, error: `Narudžba '${input.order_number}' ne postoji.` };
