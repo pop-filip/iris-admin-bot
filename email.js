@@ -264,3 +264,84 @@ export function buildShippingNotificationEmail(order) {
 
   return { subject, html };
 }
+// ── Customer: Refund Received ─────────────────────────────────────────────────
+export function buildRefundReceivedEmail(refund) {
+  const shopName   = process.env.SHOP_NAME   || 'Iris Shop';
+  const shopDomain = process.env.SHOP_DOMAIN || 'localhost';
+  const shopEmail  = process.env.SMTP_FROM   || process.env.SMTP_USER || '';
+
+  const reasonLabels = {
+    damaged:     'Beschädigte Ware',
+    wrong_item:  'Falscher Artikel geliefert',
+    not_arrived: 'Sendung nicht angekommen',
+    other:       'Sonstiges'
+  };
+
+  const subject = `Ihre Reklamation zu Bestellung ${refund.order_number} — ${shopName}`;
+
+  const html = `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:0 auto;padding:20px;">
+  <div style="background:#1a1a2e;padding:16px 24px;border-radius:8px 8px 0 0;">
+    <h1 style="color:#f0a500;margin:0;font-size:20px;">🔧 ${shopName}</h1>
+    <p style="color:#aaa;margin:4px 0 0;font-size:13px;">${shopDomain}</p>
+  </div>
+  <div style="border:1px solid #ddd;border-top:none;padding:24px;border-radius:0 0 8px 8px;">
+    <div style="background:#fff3e0;border:1px solid #ffe0b2;border-radius:6px;padding:14px 18px;margin-bottom:20px;">
+      <p style="margin:0;font-size:16px;color:#e65100;">📋 Reklamation eingegangen</p>
+      <p style="margin:6px 0 0;font-size:13px;color:#555;">Bestellnummer: <strong>${refund.order_number}</strong> · Fall-Nr.: <strong>#${refund.id}</strong></p>
+    </div>
+    <p>Sehr geehrte${refund.customer_name ? ` ${refund.customer_name}` : ''},</p>
+    <p>wir haben Ihre Reklamation erhalten und werden sie bearbeiten.</p>
+    <div style="background:#f9f9f9;border-radius:6px;padding:16px;margin:20px 0;font-size:14px;">
+      <p style="margin:0 0 8px;"><strong>Grund:</strong> ${reasonLabels[refund.reason] || refund.reason}</p>
+      <p style="margin:0;"><strong>Art:</strong> ${refund.type === 'return_refund' ? 'Rücksendung + Erstattung' : refund.type === 'replacement' ? 'Ersatzlieferung' : 'Erstattung'}</p>
+    </div>
+    <p>Wir melden uns innerhalb von <strong>1–2 Werktagen</strong>.</p>
+    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;font-size:13px;color:#777;">
+      <p>Bei Rückfragen geben Sie bitte Fall-Nr. <strong>#${refund.id}</strong> an.</p>
+      <p>Mit freundlichen Grüßen,<br><strong>${shopName}</strong><br>${shopEmail ? `<a href="mailto:${shopEmail}" style="color:#f0a500;">${shopEmail}</a>` : ''}</p>
+    </div>
+  </div>
+  <p style="text-align:center;font-size:11px;color:#bbb;margin-top:12px;">Automatisch generiert — ${new Date().toLocaleDateString('de-AT')}</p>
+</body></html>`;
+
+  return { subject, html };
+}
+
+// ── Customer: Refund Approved ─────────────────────────────────────────────────
+export function buildRefundApprovedEmail(refund) {
+  const shopName   = process.env.SHOP_NAME   || 'Iris Shop';
+  const shopDomain = process.env.SHOP_DOMAIN || 'localhost';
+  const shopEmail  = process.env.SMTP_FROM   || process.env.SMTP_USER || '';
+
+  const isReplacement = refund.type === 'replacement';
+  const subject = isReplacement
+    ? `Ihre Ersatzlieferung zu Bestellung ${refund.order_number} — ${shopName}`
+    : `Ihre Erstattung zu Bestellung ${refund.order_number} wurde genehmigt — ${shopName}`;
+
+  const html = `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:0 auto;padding:20px;">
+  <div style="background:#1a1a2e;padding:16px 24px;border-radius:8px 8px 0 0;">
+    <h1 style="color:#f0a500;margin:0;font-size:20px;">🔧 ${shopName}</h1>
+    <p style="color:#aaa;margin:4px 0 0;font-size:13px;">${shopDomain}</p>
+  </div>
+  <div style="border:1px solid #ddd;border-top:none;padding:24px;border-radius:0 0 8px 8px;">
+    <div style="background:#e8f5e9;border:1px solid #c8e6c9;border-radius:6px;padding:14px 18px;margin-bottom:20px;">
+      <p style="margin:0;font-size:16px;color:#2e7d32;">✅ ${isReplacement ? 'Ersatzlieferung genehmigt' : 'Erstattung genehmigt'}</p>
+      <p style="margin:6px 0 0;font-size:13px;color:#555;">Fall-Nr.: <strong>#${refund.id}</strong> · Bestellung: <strong>${refund.order_number}</strong></p>
+    </div>
+    <p>Sehr geehrte${refund.customer_name ? ` ${refund.customer_name}` : ''},</p>
+    ${isReplacement
+      ? `<p>Ihre Reklamation wurde geprüft und wir senden Ihnen einen Ersatzartikel zu.</p>`
+      : `<p>Ihre Reklamation wurde genehmigt.${refund.amount > 0 ? ` Der Betrag von <strong>€${refund.amount.toFixed(2)}</strong> wird erstattet (3–5 Werktage).` : ''}</p>`
+    }
+    ${refund.notes ? `<div style="background:#f9f9f9;border-radius:6px;padding:14px;margin:20px 0;font-size:14px;"><strong>Anmerkung:</strong><br>${refund.notes}</div>` : ''}
+    <div style="margin-top:24px;padding-top:16px;border-top:1px solid #eee;font-size:13px;color:#777;">
+      <p>Mit freundlichen Grüßen,<br><strong>${shopName}</strong><br>${shopEmail ? `<a href="mailto:${shopEmail}" style="color:#f0a500;">${shopEmail}</a>` : ''}</p>
+    </div>
+  </div>
+  <p style="text-align:center;font-size:11px;color:#bbb;margin-top:12px;">Automatisch generiert — ${new Date().toLocaleDateString('de-AT')}</p>
+</body></html>`;
+
+  return { subject, html };
+}

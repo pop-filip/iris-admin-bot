@@ -124,6 +124,25 @@ function initSchema() {
 
     CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
     CREATE INDEX IF NOT EXISTS idx_orders_email  ON orders(customer_email);
+
+    CREATE TABLE IF NOT EXISTS refunds (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_number   TEXT NOT NULL,
+      customer_name  TEXT,
+      customer_email TEXT,
+      reason         TEXT NOT NULL,
+      type           TEXT DEFAULT 'refund',
+      amount         REAL DEFAULT 0,
+      status         TEXT DEFAULT 'open',
+      items          TEXT,
+      supplier_notified INTEGER DEFAULT 0,
+      notes          TEXT,
+      created_at     TEXT DEFAULT (datetime('now')),
+      updated_at     TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_refunds_order  ON refunds(order_number);
+    CREATE INDEX IF NOT EXISTS idx_refunds_status ON refunds(status);
   `);
 }
 
@@ -746,4 +765,62 @@ export function listUnshipped() {
     SELECT id, order_number, customer_name, customer_email, status, total_sell, created_at
     FROM orders WHERE status IN ('new','forwarded') ORDER BY created_at ASC
   `).all();
+}
+
+// ── Refunds ────────────────────────────────────────────────────────────────────
+
+export function addRefund({ order_number, reason, type = 'refund', amount = 0, items = null, notes = '' }) {
+  const db = getDb();
+  const order = db.prepare('SELECT * FROM orders WHERE order_number = ?').get(order_number);
+  if (!order) throw new Error(`Narudžba '${order_number}' ne postoji.`);
+
+  const result = db.prepare(`
+    INSERT INTO refunds (order_number, customer_name, customer_email, reason, type, amount, items, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    order_number,
+    order.customer_name,
+    order.customer_email,
+    reason,
+    type,
+    amount || 0,
+    items ? JSON.stringify(items) : null,
+    notes
+  );
+  return { id: result.lastInsertRowid, order_number, customer_email: order.customer_email, customer_name: order.customer_name };
+}
+
+export function getRefund(id) {
+  const r = getDb().prepare('SELECT * FROM refunds WHERE id = ?').get(id);
+  if (!r) return null;
+  r.items = r.items ? JSON.parse(r.items) : null;
+  return r;
+}
+
+export function listRefunds({ status = null, limit = 20 } = {}) {
+  const db = getDb();
+  let sql = 'SELECT * FROM refunds WHERE 1=1';
+  const params = [];
+  if (status) { sql += ' AND status = ?'; params.push(status); }
+  sql += ' ORDER BY created_at DESC LIMIT ?';
+  params.push(limit);
+  return db.prepare(sql).all(...params).map(r => ({ ...r, items: r.items ? JSON.parse(r.items) : null }));
+}
+
+export function updateRefundStatus(id, status, extra = {}) {
+  const db = getDb();
+  const allowed = ['open', 'investigating', 'approved', 'rejected', 'refunded', 'replaced'];
+  if (!allowed.includes(status)) throw new Error(`Nevalidan status: ${status}. Dozvoljeno: ${allowed.join(', ')}`);
+  const fields = { status, updated_at: new Date().toISOString(), ...extra };
+  const set = Object.keys(fields).map(k => `${k} = ?`).join(', ');
+  db.prepare(`UPDATE refunds SET ${set} WHERE id = ?`).run(...Object.values(fields), id);
+  return getRefund(id);
+}
+
+export function getRefundStats() {
+  const db = getDb();
+  const byStatus = db.prepare('SELECT status, COUNT(*) as count FROM refunds GROUP BY status').all();
+  const totalAmount = db.prepare("SELECT COALESCE(SUM(amount),0) as total FROM refunds WHERE status IN ('approved','refunded')").get().total;
+  const open = db.prepare("SELECT COUNT(*) as n FROM refunds WHERE status IN ('open','investigating')").get().n;
+  return { by_status: byStatus, total_refunded: totalAmount, open_cases: open };
 }

@@ -6,9 +6,9 @@ import cron from 'node-cron';
 import Anthropic from '@anthropic-ai/sdk';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { searchProducts, countProducts, listProducts, addProduct, updateProduct, deleteProduct, getProductBySku, getCategories, logAudit, getAuditLog, exportProducts, findMissingData, getFeatured, setFeatured, getMarginReport, updateBuyPrice, addSupplier, listSuppliers, getSupplierByName, linkProductSupplier, getSupplierReport, addPriceRule, listPriceRules, deletePriceRule, applyPriceRules, getLowMarginProducts, updateSupplierFeed, getSuppliersWithFeed, syncSupplierFeed, executeSmartImport, getDailySummary, addOemNumber, searchByOem, listOemNumbers, removeOemNumber, setAlternative, getAlternatives, autoFindAlternatives, findByVehicle, getCompatibleMakes, setShippingInfo, getHazmatList, getShippingReport, addOrder, getOrder, listOrders, updateOrderStatus, setTracking, getOrderStats, listUnshipped } from './db/database.js';
+import { searchProducts, countProducts, listProducts, addProduct, updateProduct, deleteProduct, getProductBySku, getCategories, logAudit, getAuditLog, exportProducts, findMissingData, getFeatured, setFeatured, getMarginReport, updateBuyPrice, addSupplier, listSuppliers, getSupplierByName, linkProductSupplier, getSupplierReport, addPriceRule, listPriceRules, deletePriceRule, applyPriceRules, getLowMarginProducts, updateSupplierFeed, getSuppliersWithFeed, syncSupplierFeed, executeSmartImport, getDailySummary, addOemNumber, searchByOem, listOemNumbers, removeOemNumber, setAlternative, getAlternatives, autoFindAlternatives, findByVehicle, getCompatibleMakes, setShippingInfo, getHazmatList, getShippingReport, addOrder, getOrder, listOrders, updateOrderStatus, setTracking, getOrderStats, listUnshipped, addRefund, getRefund, listRefunds, updateRefundStatus, getRefundStats } from './db/database.js';
 import { sendTelegram, formatOosAlert, formatPriceAlert } from './notify.js';
-import { sendEmail, buildSupplierOrderEmail, buildOrderConfirmationEmail, buildShippingNotificationEmail } from './email.js';
+import { sendEmail, buildSupplierOrderEmail, buildOrderConfirmationEmail, buildShippingNotificationEmail, buildRefundReceivedEmail, buildRefundApprovedEmail } from './email.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -682,6 +682,64 @@ const ADMIN_TOOLS = [
     }
   },
 
+  // ── Refund Management ────────────────────────────────────────────────────
+  {
+    name: 'create_refund',
+    description: 'Otvori reklamaciju/refund za narudžbu. Automatski šalje potvrdu kupcu. Razlozi: damaged, wrong_item, not_arrived, other. Tipovi: refund (samo povrat novca), return_refund (roba se vraća + povrat), replacement (zamjena).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        order_number: { type: 'string', description: 'Broj narudžbe (ORD-2026-0001)' },
+        reason:       { type: 'string', description: 'damaged | wrong_item | not_arrived | other', enum: ['damaged', 'wrong_item', 'not_arrived', 'other'] },
+        type:         { type: 'string', description: 'refund | return_refund | replacement', enum: ['refund', 'return_refund', 'replacement'] },
+        amount:       { type: 'number', description: 'Iznos povrata u EUR (opcionalno)' },
+        notes:        { type: 'string', description: 'Interne napomene o slučaju' }
+      },
+      required: ['order_number', 'reason']
+    }
+  },
+  {
+    name: 'list_refunds',
+    description: 'Prikaži sve reklamacije. Može filtrirati po statusu: open, investigating, approved, rejected, refunded, replaced.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', description: 'Filter po statusu (opcionalno)' },
+        limit:  { type: 'number' }
+      }
+    }
+  },
+  {
+    name: 'get_refund',
+    description: 'Prikaži detalje jedne reklamacije po ID-u.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'number', description: 'ID reklamacije' }
+      },
+      required: ['id']
+    }
+  },
+  {
+    name: 'resolve_refund',
+    description: 'Ažuriraj status reklamacije. Kad se odobri (approved/refunded/replaced), automatski šalje email kupcu. Statusi: open → investigating → approved → refunded/replaced ili rejected.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id:     { type: 'number', description: 'ID reklamacije' },
+        status: { type: 'string', description: 'open | investigating | approved | rejected | refunded | replaced', enum: ['open', 'investigating', 'approved', 'rejected', 'refunded', 'replaced'] },
+        amount: { type: 'number', description: 'Iznos povrata (opcionalno, ažurira postojeći)' },
+        notes:  { type: 'string', description: 'Napomena za kupca (bit će u emailu)' }
+      },
+      required: ['id', 'status']
+    }
+  },
+  {
+    name: 'refund_stats',
+    description: 'Statistika reklamacija — otvoreni slučajevi, ukupno vraćeno, po statusu.',
+    input_schema: { type: 'object', properties: {} }
+  },
+
   // ── Alerts & Monitoring ───────────────────────────────────────────────────
   {
     name: 'send_summary',
@@ -1159,6 +1217,77 @@ async function handleAdminTool(name, input) {
         tip: inStock.length - withImg > 0 ? `⚠️ ${inStock.length - withImg} proizvoda nema sliku — Google Shopping zahtijeva sliku za svaki artikl.` : '✅ Svi proizvodi imaju sliku.'
       };
     }
+    // ── Refund Management ───────────────────────────────────────────────────
+    case 'create_refund': {
+      try {
+        const result = addRefund(input);
+        logAudit('REFUND_OPEN', result.order_number, result.customer_name || '', `${input.reason} / ${input.type || 'refund'}`);
+
+        // Auto-pošalji potvrdu kupcu
+        let emailInfo = '';
+        if (result.customer_email) {
+          const refundObj = getRefund(result.id);
+          const { subject, html } = buildRefundReceivedEmail(refundObj);
+          const emailResult = await sendEmail(result.customer_email, subject, html);
+          emailInfo = emailResult.ok
+            ? ` · ✅ Potvrda poslana na ${result.customer_email}`
+            : ` · ⚠️ Email nije poslan: ${emailResult.reason}`;
+        }
+
+        await sendTelegram(`📋 <b>Nova reklamacija #${result.id}</b>\nNarudžba: ${result.order_number}\nKupac: ${result.customer_name || '—'}\nRazlog: ${input.reason}${input.amount ? `\nIznos: €${input.amount}` : ''}`, true);
+
+        return { success: true, id: result.id, message: `Reklamacija #${result.id} otvorena za ${result.order_number}${emailInfo}` };
+      } catch(e) { return { success: false, error: e.message }; }
+    }
+    case 'list_refunds': {
+      const refunds = listRefunds({ status: input.status, limit: input.limit || 20 });
+      if (!refunds.length) return { count: 0, message: 'Nema reklamacija za zadane kriterije.' };
+      return {
+        count: refunds.length,
+        refunds: refunds.map(r => ({
+          id: r.id, order_number: r.order_number,
+          customer: r.customer_name, reason: r.reason,
+          type: r.type, status: r.status,
+          amount: r.amount > 0 ? `€${r.amount.toFixed(2)}` : '—',
+          date: r.created_at?.split('T')[0]
+        }))
+      };
+    }
+    case 'get_refund': {
+      const refund = getRefund(input.id);
+      if (!refund) return { error: `Reklamacija #${input.id} ne postoji.` };
+      return refund;
+    }
+    case 'resolve_refund': {
+      try {
+        const extra = {};
+        if (input.amount !== undefined) extra.amount = input.amount;
+        if (input.notes) extra.notes = input.notes;
+        const refund = updateRefundStatus(input.id, input.status, extra);
+        logAudit('REFUND_UPDATE', refund.order_number, refund.customer_name || '', `#${refund.id} → ${input.status}`);
+
+        // Email kupcu kad je odobreno/završeno
+        let emailInfo = '';
+        if (['approved', 'refunded', 'replaced'].includes(input.status) && refund.customer_email) {
+          const { subject, html } = buildRefundApprovedEmail(refund);
+          const emailResult = await sendEmail(refund.customer_email, subject, html);
+          emailInfo = emailResult.ok
+            ? ` · ✅ Email poslan na ${refund.customer_email}`
+            : ` · ⚠️ Email nije poslan: ${emailResult.reason}`;
+        }
+
+        return { success: true, message: `Reklamacija #${refund.id} → ${input.status}${emailInfo}` };
+      } catch(e) { return { success: false, error: e.message }; }
+    }
+    case 'refund_stats': {
+      const stats = getRefundStats();
+      return {
+        ...stats,
+        total_refunded_fmt: `€${stats.total_refunded.toFixed(2)}`,
+        warning: stats.open_cases > 0 ? `⚠️ ${stats.open_cases} otvorenih reklamacija čeka obradu.` : '✅ Nema otvorenih reklamacija.'
+      };
+    }
+
     case 'resend_customer_email': {
       const order = getOrder(input.order_number);
       if (!order) return { success: false, error: `Narudžba '${input.order_number}' ne postoji.` };
