@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { searchProducts, countProducts, listProducts, addProduct, updateProduct, deleteProduct, getProductBySku, getCategories, logAudit, getAuditLog, exportProducts, findMissingData, getFeatured, setFeatured, getMarginReport, updateBuyPrice, addSupplier, listSuppliers, getSupplierByName, linkProductSupplier, getSupplierReport, addPriceRule, listPriceRules, deletePriceRule, applyPriceRules, getLowMarginProducts, updateSupplierFeed, getSuppliersWithFeed, syncSupplierFeed, executeSmartImport, getDailySummary, addOemNumber, searchByOem, listOemNumbers, removeOemNumber, setAlternative, getAlternatives, autoFindAlternatives, findByVehicle, getCompatibleMakes, setShippingInfo, getHazmatList, getShippingReport, addOrder, getOrder, listOrders, updateOrderStatus, setTracking, getOrderStats, listUnshipped } from './db/database.js';
 import { sendTelegram, formatOosAlert, formatPriceAlert } from './notify.js';
+import { sendEmail, buildSupplierOrderEmail } from './email.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -648,6 +649,19 @@ const ADMIN_TOOLS = [
     description: 'Prikaži sve narudžbe koje još nisu otpremljene (status: new ili forwarded).',
     input_schema: { type: 'object', properties: {} }
   },
+  {
+    name: 'forward_to_supplier',
+    description: 'Pošalji narudžbu dobavljaču emailom. Automatski mijenja status u "forwarded". Koristi kad treba proslijediti narudžbu.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        order_number:  { type: 'string', description: 'Broj narudžbe (ORD-2026-0001)' },
+        supplier_email:{ type: 'string', description: 'Email dobavljača (opcionalno — ako nije u bazi)' },
+        note:          { type: 'string', description: 'Dodatna napomena u emailu dobavljaču' }
+      },
+      required: ['order_number']
+    }
+  },
 
   // ── Alerts & Monitoring ───────────────────────────────────────────────────
   {
@@ -1079,6 +1093,41 @@ async function handleAdminTool(name, input) {
           date:         o.created_at?.split('T')[0]
         }))
       };
+    }
+    case 'forward_to_supplier': {
+      const order = getOrder(input.order_number);
+      if (!order) return { success: false, error: `Narudžba '${input.order_number}' ne postoji.` };
+      if (order.status === 'shipped' || order.status === 'delivered') {
+        return { success: false, error: `Narudžba je već u statusu '${order.status}' — forwarding nije potreban.` };
+      }
+
+      // Dodaj napomenu ako postoji
+      if (input.note) order.notes = [order.notes, input.note].filter(Boolean).join('\n');
+
+      // Nađi email dobavljača
+      let supplierEmail = input.supplier_email;
+      if (!supplierEmail && order.supplier_id) {
+        const suppliers = listSuppliers();
+        const sup = suppliers.find(s => s.id === order.supplier_id);
+        supplierEmail = sup?.email;
+      }
+      if (!supplierEmail) {
+        return { success: false, error: 'Email dobavljača nije pronađen. Dodaj ga u bazu (add_supplier) ili proslijedi email direktno: forward_to_supplier { supplier_email: "email@dobavljac.at" }' };
+      }
+
+      const { subject, html } = buildSupplierOrderEmail(order, { email: supplierEmail });
+      const result = await sendEmail(supplierEmail, subject, html);
+
+      if (!result.ok) return { success: false, error: `Email nije poslan: ${result.reason}` };
+
+      // Ažuriraj status
+      updateOrderStatus(order.order_number, 'forwarded', { supplier_order_ref: input.note || '' });
+      logAudit('ORDER_FORWARDED', order.order_number, order.customer_name || '', `Email → ${supplierEmail}`);
+
+      // Telegram notifikacija
+      await sendTelegram(`📤 <b>Narudžba proslijeđena</b>\n${order.order_number} → <code>${supplierEmail}</code>\nKupac: ${order.customer_name}\nProizvodi: ${order.items.length}`, true);
+
+      return { success: true, message: `✅ Narudžba ${order.order_number} proslijeđena na ${supplierEmail}. Status → forwarded.` };
     }
 
     // ── Alerts & Monitoring ─────────────────────────────────────────────────
