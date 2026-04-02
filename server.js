@@ -1358,7 +1358,7 @@ cron.schedule(SUMMARY_SCHEDULE, async () => {
 }, { timezone: 'Europe/Vienna' });
 
 // ── Static files ──────────────────────────────────────────────────────────────
-app.use(express.static(join(__dirname, '../html')));
+app.use(express.static(join(__dirname, 'html')));
 
 app.listen(PORT, () => {
   console.log(`✓ Iris Admin Bot — ${SHOP_NAME} — Port ${PORT}`);

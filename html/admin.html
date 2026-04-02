@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Iris Admin — Best Price Autoteile</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e1e4e8; min-height: 100vh; display: flex; flex-direction: column; }
+
+    /* Login */
+    #login-screen { display: flex; align-items: center; justify-content: center; flex: 1; }
+    .login-box { background: #1c1f26; border: 1px solid #30363d; border-radius: 12px; padding: 40px; width: 340px; text-align: center; }
+    .login-box h1 { font-size: 22px; margin-bottom: 6px; }
+    .login-box p { color: #8b949e; font-size: 14px; margin-bottom: 24px; }
+    .login-box input { width: 100%; padding: 10px 14px; background: #0f1117; border: 1px solid #30363d; border-radius: 8px; color: #e1e4e8; font-size: 15px; margin-bottom: 12px; }
+    .login-box input:focus { outline: none; border-color: #f0a500; }
+    .login-box button { width: 100%; padding: 10px; background: #f0a500; color: #000; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }
+    .login-box button:hover { background: #d4920a; }
+    .login-error { color: #f85149; font-size: 13px; margin-top: 8px; display: none; }
+
+    /* App */
+    #app { display: none; flex-direction: column; height: 100vh; }
+    header { background: #1c1f26; border-bottom: 1px solid #30363d; padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+    header h1 { font-size: 16px; font-weight: 600; }
+    header span { color: #8b949e; font-size: 13px; }
+
+    /* Stats bar */
+    .stats-bar { background: #161b22; border-bottom: 1px solid #30363d; padding: 8px 20px; font-size: 12px; color: #8b949e; display: flex; gap: 20px; align-items: center; flex-shrink: 0; flex-wrap: wrap; }
+    .stats-bar b { color: #f0a500; }
+    .stats-pill { background: #1c1f26; border: 1px solid #30363d; border-radius: 20px; padding: 3px 10px; font-size: 11px; }
+    .stats-pill.green { border-color: #238636; color: #3fb950; }
+    .stats-pill.red { border-color: #6e2020; color: #f85149; }
+    .stats-pill.orange { border-color: #7a4400; color: #f0a500; }
+    .stats-actions { margin-left: auto; display: flex; gap: 8px; }
+    .action-btn { background: #1c1f26; border: 1px solid #30363d; color: #8b949e; border-radius: 6px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
+    .action-btn:hover { border-color: #f0a500; color: #f0a500; }
+    .action-btn.upload { border-color: #238636; color: #3fb950; }
+    .action-btn.upload:hover { background: #238636; color: #fff; }
+
+    /* Chat */
+    #messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+    .msg { max-width: 75%; padding: 10px 14px; border-radius: 10px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+    .msg.user { background: #f0a500; color: #000; align-self: flex-end; border-radius: 10px 10px 2px 10px; font-weight: 500; }
+    .msg.iris { background: #1c1f26; border: 1px solid #30363d; align-self: flex-start; border-radius: 10px 10px 10px 2px; }
+    .msg.iris b, .msg.iris strong { color: #f0a500; }
+    .msg.thinking { color: #8b949e; font-style: italic; }
+
+    /* Markdown stilovi unutar Iris poruka */
+    .msg.iris p { margin-bottom: 8px; }
+    .msg.iris p:last-child { margin-bottom: 0; }
+    .msg.iris ul, .msg.iris ol { margin: 6px 0 8px 18px; }
+    .msg.iris li { margin-bottom: 3px; }
+    .msg.iris code { background: #0f1117; border: 1px solid #30363d; border-radius: 4px; padding: 1px 5px; font-size: 12px; font-family: 'SF Mono', monospace; }
+    .msg.iris pre { background: #0f1117; border: 1px solid #30363d; border-radius: 6px; padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
+    .msg.iris pre code { background: none; border: none; padding: 0; }
+    .msg.iris table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
+    .msg.iris th { background: #0f1117; color: #f0a500; padding: 6px 10px; text-align: left; border: 1px solid #30363d; }
+    .msg.iris td { padding: 5px 10px; border: 1px solid #30363d; }
+    .msg.iris tr:nth-child(even) td { background: rgba(255,255,255,0.03); }
+    .msg.iris h3 { color: #f0a500; margin: 8px 0 4px; font-size: 14px; }
+    .msg.iris hr { border: none; border-top: 1px solid #30363d; margin: 8px 0; }
+
+    /* Input */
+    .input-area { background: #1c1f26; border-top: 1px solid #30363d; padding: 16px 20px; display: flex; gap: 10px; }
+    .input-area textarea { flex: 1; background: #0f1117; border: 1px solid #30363d; border-radius: 8px; color: #e1e4e8; padding: 10px 14px; font-size: 14px; resize: none; height: 44px; max-height: 120px; line-height: 1.4; font-family: inherit; }
+    .input-area textarea:focus { outline: none; border-color: #f0a500; }
+    .input-area button { background: #f0a500; color: #000; border: none; border-radius: 8px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+    .input-area button:hover { background: #d4920a; }
+    .input-area button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Quick actions */
+    .quick-actions { padding: 10px 20px; background: #0f1117; border-top: 1px solid #30363d; display: flex; gap: 8px; flex-wrap: wrap; }
+    .qa-btn { background: #1c1f26; border: 1px solid #30363d; color: #e1e4e8; border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+    .qa-btn:hover { border-color: #f0a500; color: #f0a500; }
+
+    #logout { background: none; border: 1px solid #30363d; color: #8b949e; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+    #logout:hover { border-color: #f85149; color: #f85149; }
+  </style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-screen">
+  <div class="login-box">
+    <h1>🔧 Iris Admin</h1>
+    <p>Best Price Autoteile — Shop Management</p>
+    <input type="password" id="password-input" placeholder="Passwort..." />
+    <button onclick="login()">Einloggen</button>
+    <div class="login-error" id="login-error">Falsches Passwort.</div>
+  </div>
+</div>
+
+<!-- Smart Import Modal -->
+<div id="upload-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:999;align-items:flex-start;justify-content:center;overflow-y:auto;padding:20px 0;">
+  <div style="background:#1c1f26;border:1px solid #30363d;border-radius:12px;padding:28px;width:680px;max-width:95vw;margin:auto;">
+
+    <!-- Step 1: Upload -->
+    <div id="import-step1">
+      <h2 style="font-size:16px;margin-bottom:4px;">📤 Smart CSV Import</h2>
+      <p style="color:#8b949e;font-size:13px;margin-bottom:20px;">Iris analizira CSV od dobavljača i automatski mapira kolone.</p>
+      <div id="drop-zone" style="border:2px dashed #30363d;border-radius:8px;padding:36px;text-align:center;cursor:pointer;color:#8b949e;font-size:14px;margin-bottom:16px;transition:border-color .2s;">
+        <div style="font-size:2rem;margin-bottom:8px;">📂</div>
+        CSV datoteku prevuci ovdje ili klikni za odabir
+        <input type="file" id="csv-file" accept=".csv,.txt" style="display:none">
+      </div>
+      <div id="upload-status" style="font-size:13px;color:#8b949e;margin-bottom:16px;min-height:18px;"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button onclick="closeUpload()" style="background:none;border:1px solid #30363d;color:#8b949e;border-radius:6px;padding:8px 16px;cursor:pointer;">Abbrechen</button>
+        <button id="analyze-btn" onclick="doAnalyze()" style="background:#f0a500;border:none;color:#000;border-radius:6px;padding:8px 18px;font-weight:600;cursor:pointer;">🔍 Analysieren</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Mapping review -->
+    <div id="import-step2" style="display:none;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <h2 style="font-size:16px;">🗺️ Column Mapping</h2>
+        <span id="import-confidence" style="font-size:12px;padding:3px 10px;border-radius:20px;"></span>
+      </div>
+      <p id="import-notes" style="color:#8b949e;font-size:13px;margin-bottom:16px;"></p>
+
+      <div style="overflow-x:auto;margin-bottom:16px;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;" id="mapping-table">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:8px 10px;background:#0f1117;color:#f0a500;border:1px solid #30363d;">Naš field</th>
+              <th style="text-align:left;padding:8px 10px;background:#0f1117;color:#f0a500;border:1px solid #30363d;">Supplier kolona</th>
+              <th style="text-align:left;padding:8px 10px;background:#0f1117;color:#f0a500;border:1px solid #30363d;">Primjer</th>
+            </tr>
+          </thead>
+          <tbody id="mapping-body"></tbody>
+        </table>
+      </div>
+
+      <div id="category-map-section" style="display:none;margin-bottom:16px;">
+        <p style="font-size:13px;color:#8b949e;margin-bottom:8px;">📂 Mapiranje kategorija:</p>
+        <div id="category-map-body" style="display:flex;flex-direction:column;gap:6px;font-size:13px;"></div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;padding:10px 12px;background:#0f1117;border-radius:6px;font-size:13px;">
+        <label style="color:#8b949e;">Cijena × </label>
+        <input type="number" id="price-multiplier" value="1" step="0.01" min="0.1" max="10"
+          style="width:70px;background:#1c1f26;border:1px solid #30363d;color:#e1e4e8;border-radius:4px;padding:4px 8px;font-size:13px;">
+        <span style="color:#8b949e;">(npr. 1.2 = +20% za maržu, 1.19 = dodaj 19% PDV)</span>
+      </div>
+
+      <div id="import-status" style="font-size:13px;min-height:18px;margin-bottom:12px;"></div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button onclick="backToStep1()" style="background:none;border:1px solid #30363d;color:#8b949e;border-radius:6px;padding:8px 16px;cursor:pointer;">← Nazad</button>
+        <button onclick="closeUpload()" style="background:none;border:1px solid #30363d;color:#8b949e;border-radius:6px;padding:8px 16px;cursor:pointer;">Abbrechen</button>
+        <button id="execute-btn" onclick="doExecute()" style="background:#238636;border:none;color:#fff;border-radius:6px;padding:8px 18px;font-weight:600;cursor:pointer;">✅ Import starten</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- App -->
+<div id="app">
+  <header>
+    <h1>🔧 Iris Admin — Best Price Autoteile</h1>
+    <button id="logout" onclick="logout()">Logout</button>
+  </header>
+
+  <div class="stats-bar">
+    <span class="stats-pill" id="stat-total">⏳ Lade...</span>
+    <span class="stats-pill green" id="stat-instock"></span>
+    <span class="stats-pill red" id="stat-outstock"></span>
+    <span class="stats-pill orange" id="stat-cats"></span>
+    <div class="stats-actions">
+      <button class="action-btn upload" onclick="openUpload()">📤 CSV Import</button>
+      <button class="action-btn" onclick="exportCSV()">📥 Export CSV</button>
+      <button class="action-btn" id="sync-btn" onclick="triggerSync()" style="border-color:#58a6ff;color:#58a6ff;">🔄 Sync</button>
+    </div>
+  </div>
+
+  <div id="messages"></div>
+
+  <div class="quick-actions">
+    <button class="qa-btn" onclick="quickSend('Zeige Statistiken des Katalogs')">📊 Statistiken</button>
+    <button class="qa-btn" onclick="quickSend('Zeige alle Produkte die nicht auf Lager sind')">❌ Out of Stock</button>
+    <button class="qa-btn" onclick="quickSend('Provjeri katalog za nedostajuće podatke')">⚠️ Missing Data</button>
+    <button class="qa-btn" onclick="quickSend('Provjeri duplikate u katalogu')">🔁 Duplikate</button>
+    <button class="qa-btn" onclick="quickSend('Zeige Änderungshistorie der letzten 10 Einträge')">📋 Audit Log</button>
+    <button class="qa-btn" onclick="quickSend('Zeige alle Kategorien mit Anzahl')">📂 Kategorien</button>
+    <button class="qa-btn" onclick="quickSend('Zeige alle Bosch Produkte')">🔍 Bosch</button>
+    <button class="qa-btn" onclick="quickSend('Prikaži sve dobavljače')">🏭 Dobavljači</button>
+    <button class="qa-btn" onclick="quickSend('Prikaži margin report')">💰 Marže</button>
+    <button class="qa-btn" onclick="quickSend('Prikaži pravila za cijene')">📐 Price Rules</button>
+    <button class="qa-btn" onclick="quickSend('Prikaži proizvode ispod 20% marže')">⚠️ Low Margin</button>
+    <button class="qa-btn" onclick="quickSend('Prikaži sync status svih dobavljača')">🔄 Sync Status</button>
+    <button class="qa-btn" onclick="quickSend('Generiši SEO opise za sve proizvode bez opisa, limit 5')">✍️ SEO Opisi</button>
+    <button class="qa-btn" onclick="quickSend('Prikaži dnevni izvještaj')">📊 Summary</button>
+    <button class="qa-btn" onclick="quickSend('Pošalji test notifikaciju na Telegram')">🔔 Test Alert</button>
+  </div>
+
+  <div class="input-area">
+    <textarea id="msg-input" placeholder="Schreib Iris... (z.B. 'Füge Bremsscheiben für BMW E90 hinzu, €45, SKU BP-999')" onkeydown="handleKey(event)"></textarea>
+    <button id="send-btn" onclick="sendMessage()">Senden</button>
+  </div>
+</div>
+
+<script>
+  const API = '/api/admin/chat';
+  let password = '';
+  let history = [];
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  function login() {
+    const pw = document.getElementById('password-input').value.trim();
+    if (!pw) return;
+    password = pw;
+    // Test the password with a lightweight request
+    fetch(API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${pw}` },
+      body: JSON.stringify({ message: 'Zeige kurze Statistiken', history: [] })
+    }).then(r => {
+      if (r.status === 401) {
+        document.getElementById('login-error').style.display = 'block';
+        password = '';
+      } else {
+        localStorage.setItem('iris_admin_pw', pw);
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('app').style.display = 'flex';
+        r.json().then(d => {
+          addMessage('iris', d.reply || '');
+          loadStats();
+        });
+      }
+    }).catch(() => {
+      document.getElementById('login-error').style.display = 'block';
+    });
+  }
+
+  function logout() {
+    localStorage.removeItem('iris_admin_pw');
+    password = '';
+    history = [];
+    document.getElementById('login-screen').style.display = 'flex';
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('messages').innerHTML = '';
+  }
+
+  // Auto-login iz localStorage
+  window.addEventListener('load', () => {
+    const saved = localStorage.getItem('iris_admin_pw');
+    if (saved) {
+      document.getElementById('password-input').value = saved;
+      password = saved;
+      login();
+    }
+  });
+
+  document.getElementById('password-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') login();
+  });
+
+  // ── Stats ─────────────────────────────────────────────────────────────────
+  function loadStats() {
+    fetch('/api/health').then(r => r.json()).then(d => {
+      document.getElementById('stat-total').textContent = `📦 ${d.products} Produkte`;
+    }).catch(() => {});
+
+    // Detaljne stats via admin chat (brzo, bez AI)
+    fetch('/api/admin/stats', {
+      headers: { 'Authorization': `Bearer ${password}` }
+    }).then(r => r.ok ? r.json() : null).then(d => {
+      if (!d) return;
+      document.getElementById('stat-instock').textContent = `✅ ${d.in_stock} na stanju`;
+      document.getElementById('stat-outstock').textContent = `❌ ${d.out_of_stock} nema`;
+      document.getElementById('stat-cats').textContent = `📂 ${d.categories} kategorija`;
+    }).catch(() => {});
+  }
+
+  // ── Export CSV ────────────────────────────────────────────────────────────
+  function exportCSV() {
+    const a = document.createElement('a');
+    a.href = '/api/admin/export';
+    a.setAttribute('download', '');
+    const headers = new Headers({ 'Authorization': `Bearer ${password}` });
+    fetch('/api/admin/export', { headers }).then(r => r.blob()).then(blob => {
+      a.href = URL.createObjectURL(blob);
+      a.click();
+    });
+  }
+
+  // ── Smart Import ──────────────────────────────────────────────────────────
+  let csvFile = null, csvText = null, currentMapping = {}, currentCategoryMap = {}, csvHeaders = [], csvSample = [];
+
+  const OUR_FIELDS = [
+    { key:'sku', label:'SKU', required:true }, { key:'name', label:'Naziv', required:true },
+    { key:'category', label:'Kategorija', required:true }, { key:'brand', label:'Brend', required:false },
+    { key:'price', label:'Cijena', required:true }, { key:'in_stock', label:'Zaliha', required:false },
+    { key:'makes', label:'Marke vozila', required:false }, { key:'models', label:'Modeli', required:false },
+    { key:'url', label:'URL', required:false }, { key:'description', label:'Opis', required:false },
+    { key:'image_url', label:'Slika URL', required:false },
+  ];
+  const OUR_CATEGORIES = ['Bremssystem','Motorteile','Fahrwerk','Kühlung','Elektrik','Abgasanlage'];
+
+  function openUpload() {
+    document.getElementById('upload-modal').style.display = 'flex';
+    document.getElementById('import-step1').style.display = 'block';
+    document.getElementById('import-step2').style.display = 'none';
+    document.getElementById('upload-status').textContent = '';
+    csvFile = null; csvText = null;
+    initDropZone();
+  }
+  function closeUpload() { document.getElementById('upload-modal').style.display = 'none'; }
+  function backToStep1() {
+    document.getElementById('import-step1').style.display = 'block';
+    document.getElementById('import-step2').style.display = 'none';
+  }
+
+  function initDropZone() {
+    const dz = document.getElementById('drop-zone');
+    const inp = document.getElementById('csv-file');
+    if (!dz || !inp) return;
+    dz.onclick = () => inp.click();
+    dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = '#f0a500'; };
+    dz.ondragleave = () => { dz.style.borderColor = '#30363d'; };
+    dz.ondrop = e => { e.preventDefault(); dz.style.borderColor = '#30363d'; setFile(e.dataTransfer.files[0], dz); };
+    inp.onchange = () => setFile(inp.files[0], dz);
+  }
+  function setFile(f, dz) { csvFile = f; if (f) dz.innerHTML = `<div style="font-size:1.5rem">✅</div>${f.name}`; }
+  initDropZone();
+
+  function getSampleVal(col, row=0) {
+    if (!col || !csvSample[row]) return '—';
+    const i = csvHeaders.indexOf(col); return i >= 0 ? (csvSample[row][i] || '—') : '—';
+  }
+
+  async function doAnalyze() {
+    if (!csvFile) { document.getElementById('upload-status').textContent = '⚠️ Odaberi CSV datoteku.'; return; }
+    const btn = document.getElementById('analyze-btn');
+    btn.disabled = true; btn.textContent = '⏳ Iris analizira...';
+    document.getElementById('upload-status').textContent = 'Claude čita CSV strukturu...';
+    try {
+      csvText = await csvFile.text();
+      const res = await fetch('/api/admin/import/analyze', {
+        method:'POST', headers:{'Authorization':`Bearer ${password}`,'Content-Type':'text/csv'}, body:csvText
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      currentMapping = data.mapping || {}; currentCategoryMap = data.category_map || {};
+      csvHeaders = data.headers || []; csvSample = data.sample || [];
+      renderMappingUI(data);
+      document.getElementById('import-step1').style.display = 'none';
+      document.getElementById('import-step2').style.display = 'block';
+      document.getElementById('price-multiplier').value = data.price_multiplier || 1;
+    } catch(e) {
+      document.getElementById('upload-status').style.color = '#f85149';
+      document.getElementById('upload-status').textContent = '❌ ' + e.message;
+    }
+    btn.disabled = false; btn.textContent = '🔍 Analysieren';
+  }
+
+  function renderMappingUI(data) {
+    const conf = data.confidence || 'medium';
+    const confEl = document.getElementById('import-confidence');
+    confEl.textContent = conf==='high' ? '✅ Visoka sigurnost' : conf==='medium' ? '⚠️ Srednja sigurnost' : '❌ Niska sigurnost';
+    confEl.style.cssText += `;background:${conf==='high'?'#238636':conf==='medium'?'#7a4400':'#6e2020'};color:#fff`;
+    document.getElementById('import-notes').textContent = data.notes || '';
+
+    const headerOptions = ['', ...csvHeaders].map(h => `<option value="${h}">${h||'— nije mapirano —'}</option>`).join('');
+    document.getElementById('mapping-body').innerHTML = OUR_FIELDS.map(f => {
+      const mapped = currentMapping[f.key] || '';
+      const opts = ['', ...csvHeaders].map(h =>
+        `<option value="${h}" ${mapped===h&&h?'selected':''}>${h||'— nije mapirano —'}</option>`).join('');
+      return `<tr>
+        <td style="padding:7px 10px;border:1px solid #30363d;color:${f.required?'#e1e4e8':'#8b949e'}">${f.label}${f.required?'<span style="color:#f85149"> *</span>':''}</td>
+        <td style="padding:4px 8px;border:1px solid #30363d;">
+          <select data-field="${f.key}" onchange="updateMapping(this)" style="background:#0f1117;border:1px solid #30363d;color:#e1e4e8;border-radius:4px;padding:4px 8px;font-size:12px;width:100%">${opts}</select>
+        </td>
+        <td style="padding:7px 10px;border:1px solid #30363d;color:#8b949e;font-size:12px;font-family:monospace" id="sample-${f.key}">${getSampleVal(mapped)}</td>
+      </tr>`;
+    }).join('');
+
+    if (Object.keys(currentCategoryMap).length > 0) {
+      document.getElementById('category-map-section').style.display = 'block';
+      document.getElementById('category-map-body').innerHTML = Object.entries(currentCategoryMap).map(([from, to]) =>
+        `<div style="display:flex;align-items:center;gap:10px;">
+          <span style="color:#8b949e;min-width:140px;">${from}</span><span style="color:#8b949e;">→</span>
+          <select onchange="updateCategoryMap('${from}',this.value)" style="background:#0f1117;border:1px solid #30363d;color:#e1e4e8;border-radius:4px;padding:3px 8px;font-size:12px;">
+            ${OUR_CATEGORIES.map(c=>`<option value="${c}" ${to===c?'selected':''}>${c}</option>`).join('')}
+          </select></div>`).join('');
+    }
+  }
+
+  function updateMapping(sel) {
+    currentMapping[sel.dataset.field] = sel.value || null;
+    document.getElementById(`sample-${sel.dataset.field}`).textContent = getSampleVal(sel.value);
+  }
+  function updateCategoryMap(from, to) { currentCategoryMap[from] = to; }
+
+  async function doExecute() {
+    const btn = document.getElementById('execute-btn');
+    btn.disabled = true; btn.textContent = '⏳ Importira...';
+    document.getElementById('import-status').textContent = 'Import u toku...';
+    try {
+      const res = await fetch('/api/admin/import/execute', {
+        method:'POST',
+        headers:{'Authorization':`Bearer ${password}`,'Content-Type':'application/json'},
+        body: JSON.stringify({ csv:csvText, mapping:currentMapping, category_map:currentCategoryMap,
+          price_multiplier: parseFloat(document.getElementById('price-multiplier').value)||1 })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      document.getElementById('import-status').style.color = '#3fb950';
+      document.getElementById('import-status').innerHTML =
+        `✅ <b>${data.imported}</b> novo · <b>${data.updated}</b> ažurirano · <b>${data.errors}</b> grešaka · Ukupno: <b>${data.total_products}</b>`;
+      loadStats(); btn.textContent = '✅ Gotovo';
+      setTimeout(closeUpload, 3000);
+    } catch(e) {
+      document.getElementById('import-status').style.color = '#f85149';
+      document.getElementById('import-status').textContent = '❌ ' + e.message;
+      btn.disabled = false; btn.textContent = '✅ Import starten';
+    }
+  }
+
+  // ── Manual Sync ───────────────────────────────────────────────────────────
+  async function triggerSync() {
+    const btn = document.getElementById('sync-btn');
+    btn.textContent = '⏳ Sync...';
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/admin/sync', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      const data = await res.json();
+      const msg = data.results
+        ? data.results.map(r => r.error ? `❌ ${r.supplier}: ${r.error}` : `✅ ${r.supplier}: ${r.changes?.updated || 0} ažurirano`).join('\n')
+        : data.message || 'Sync završen';
+      addMessage('iris', msg);
+      loadStats();
+    } catch { addMessage('iris', '❌ Sync greška.'); }
+    btn.textContent = '🔄 Sync';
+    btn.disabled = false;
+  }
+
+
+  // ── Chat ──────────────────────────────────────────────────────────────────
+  function addMessage(role, text) {
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    if (role === 'iris') {
+      div.innerHTML = marked.parse(text);
+    } else {
+      div.textContent = text;
+    }
+    document.getElementById('messages').appendChild(div);
+    div.scrollIntoView({ behavior: 'smooth' });
+    return div;
+  }
+
+  async function sendMessage() {
+    const input = document.getElementById('msg-input');
+    const text = input.value.trim();
+    if (!text) return;
+
+    input.value = '';
+    input.style.height = '44px';
+    document.getElementById('send-btn').disabled = true;
+
+    addMessage('user', text);
+    const thinking = addMessage('iris thinking', '...');
+
+    try {
+      const res = await fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${password}` },
+        body: JSON.stringify({ message: text, history })
+      });
+
+      if (res.status === 401) { logout(); return; }
+      const data = await res.json();
+      const reply = data.reply || data.error || 'Fehler.';
+
+      thinking.remove();
+      addMessage('iris', reply);
+
+      history.push({ role: 'user', content: text });
+      history.push({ role: 'assistant', content: reply });
+      if (history.length > 20) history.splice(0, 2);
+
+      loadStats();
+    } catch {
+      thinking.remove();
+      addMessage('iris', '❌ Verbindungsfehler. Bitte erneut versuchen.');
+    }
+
+    document.getElementById('send-btn').disabled = false;
+    input.focus();
+  }
+
+  function quickSend(text) {
+    document.getElementById('msg-input').value = text;
+    sendMessage();
+  }
+
+  function handleKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    // Auto-resize
+    e.target.style.height = '44px';
+    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+  }
+</script>
+</body>
+</html>
