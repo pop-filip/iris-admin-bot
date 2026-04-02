@@ -1,0 +1,22 @@
+{
+  "name": "iris-admin-bot",
+  "version": "1.0.0",
+  "description": "Iris — AI admin bot za dropshipping shopove",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.52.0",
+    "better-sqlite3": "^12.8.0",
+    "cors": "^2.8.5",
+    "csv-parse": "^6.2.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.1",
+    "node-cron": "^4.2.1",
+    "telegraf": "^4.16.3"
+  }
+}
