@@ -650,6 +650,12 @@ const ADMIN_TOOLS = [
     input_schema: { type: 'object', properties: {} }
   },
   {
+    name: 'feed_stats',
+    description: 'Prikaži statistiku Google Shopping feeda — koliko proizvoda je u feedu, koji nemaju sliku/opis/URL.',
+    input_schema: { type: 'object', properties: {} }
+  },
+
+  {
     name: 'forward_to_supplier',
     description: 'Pošalji narudžbu dobavljaču emailom. Automatski mijenja status u "forwarded". Koristi kad treba proslijediti narudžbu.',
     input_schema: {
@@ -1094,6 +1100,25 @@ async function handleAdminTool(name, input) {
         }))
       };
     }
+    case 'feed_stats': {
+      const all      = listProducts({ limit: 5000 });
+      const inStock  = all.filter(p => p.in_stock === 1);
+      const withImg  = inStock.filter(p => p.image_url).length;
+      const withDesc = inStock.filter(p => p.description).length;
+      const withUrl  = inStock.filter(p => p.url).length;
+      return {
+        total_products:      all.length,
+        in_feed:             inStock.length,
+        with_image:          withImg,
+        missing_image:       inStock.length - withImg,
+        with_description:    withDesc,
+        missing_description: inStock.length - withDesc,
+        with_url:            withUrl,
+        missing_url:         inStock.length - withUrl,
+        feed_url:            `https://${SHOP_DOMAIN}/api/feed/google-shopping.xml`,
+        tip: inStock.length - withImg > 0 ? `⚠️ ${inStock.length - withImg} proizvoda nema sliku — Google Shopping zahtijeva sliku za svaki artikl.` : '✅ Svi proizvodi imaju sliku.'
+      };
+    }
     case 'forward_to_supplier': {
       const order = getOrder(input.order_number);
       if (!order) return { success: false, error: `Narudžba '${input.order_number}' ne postoji.` };
@@ -1306,6 +1331,90 @@ app.get('/api/products/categories', (req, res) => {
 // ── Health Check ──────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'iris-admin-bot', shop: SHOP_NAME, products: countProducts() });
+});
+
+// ── Google Shopping Feed ─────────────────────────────────────────────────────
+// Kompatibilan sa: Google Merchant Center, Idealo, Geizhals, Preisvergleich.at
+const GOOGLE_CATEGORIES = {
+  'Bremssystem':  'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Braking',
+  'Motorteile':   'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Engine Parts',
+  'Fahrwerk':     'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Suspension Parts',
+  'Kühlung':      'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Climate Control',
+  'Elektrik':     'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Electrical Components',
+  'Abgasanlage':  'Vehicles & Parts > Vehicle Parts & Accessories > Motor Vehicle Parts > Motor Vehicle Exhaust',
+};
+
+function xmlEscape(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+app.get('/api/feed/google-shopping.xml', (req, res) => {
+  const products = listProducts({ limit: 5000 }).filter(p => p.in_stock === 1);
+  const shopDomain = SHOP_DOMAIN;
+  const updated = new Date().toUTCString();
+
+  const items = products.map(p => {
+    const url    = p.url || `https://${shopDomain}/produkte/${p.sku.toLowerCase()}`;
+    const imgUrl = p.image_url || '';
+    const desc   = p.description || `${p.name} — ${p.brand} — ${p.category}`;
+    const gCat   = GOOGLE_CATEGORIES[p.category] || 'Vehicles & Parts > Vehicle Parts & Accessories';
+
+    return `
+    <item>
+      <g:id>${xmlEscape(p.sku)}</g:id>
+      <g:title>${xmlEscape(p.name)}</g:title>
+      <g:description>${xmlEscape(desc)}</g:description>
+      <g:link>${xmlEscape(url)}</g:link>
+      ${imgUrl ? `<g:image_link>${xmlEscape(imgUrl)}</g:image_link>` : ''}
+      <g:condition>new</g:condition>
+      <g:availability>in stock</g:availability>
+      <g:price>${p.price.toFixed(2)} EUR</g:price>
+      <g:brand>${xmlEscape(p.brand)}</g:brand>
+      <g:mpn>${xmlEscape(p.sku)}</g:mpn>
+      <g:google_product_category>${xmlEscape(gCat)}</g:google_product_category>
+      <g:product_type>${xmlEscape(p.category)}</g:product_type>
+      ${p.makes ? `<g:vehicle_make>${xmlEscape(p.makes)}</g:vehicle_make>` : ''}
+    </item>`;
+  }).join('');
+
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:g="http://base.google.com/ns/1.0">
+  <channel>
+    <title>${xmlEscape(SHOP_NAME)}</title>
+    <link>https://${shopDomain}</link>
+    <description>${xmlEscape(SHOP_NAME)} — Kfz-Ersatzteile</description>
+    <lastBuildDate>${updated}</lastBuildDate>
+    ${items}
+  </channel>
+</rss>`;
+
+  res.set('Content-Type', 'application/xml; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=21600'); // 6h cache
+  res.send(xml);
+});
+
+app.get('/api/feed/stats', (req, res) => {
+  const all      = listProducts({ limit: 5000 });
+  const inStock  = all.filter(p => p.in_stock === 1);
+  const withImg  = inStock.filter(p => p.image_url);
+  const withDesc = inStock.filter(p => p.description);
+  const withUrl  = inStock.filter(p => p.url);
+  res.json({
+    total_products:      all.length,
+    in_feed:             inStock.length,
+    with_image:          withImg.length,
+    with_description:    withDesc.length,
+    with_url:            withUrl.length,
+    missing_image:       inStock.length - withImg.length,
+    missing_description: inStock.length - withDesc.length,
+    missing_url:         inStock.length - withUrl.length,
+    feed_url:            `https://${SHOP_DOMAIN}/api/feed/google-shopping.xml`
+  });
 });
 
 // ── Admin Stats (brzo, bez AI) ────────────────────────────────────────────────
