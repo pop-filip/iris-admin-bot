@@ -17,6 +17,9 @@ import { addLead, listLeads, getLeadById, updateLeadStatus, getLeadStats, notify
 import { addClient, getClientById, getClientByDomain, listClients, updateClient, getClientStats, addProject, updateProject, addClientNote, formatClient } from './clients.js';
 import { addActivity, markActivityDone, listActivities, getMonthSummary, getCarePlanClients, sendBillingReminders, formatCareSummary, currentMonth } from './careplan.js';
 import { createInvoice, getInvoiceById, getInvoiceByNumber, listInvoices, updateInvoiceStatus, getInvoiceStats, createCarePlanInvoice, formatInvoice } from './invoice.js';
+import { logDeploy, listDeploys, getLastDeploy, getDeployStats, notifyDeploy, formatDeployList } from './deploylog.js';
+import { checkAllBackups, checkSingleBackup, formatBackupReport } from './backup.js';
+import { fetchKeywordPositions, checkAllKeywords, getCurrentPositions, formatKeywordReport, formatChangesAlert } from './competitor.js';
 import { registerTelegramWebhook, registerCommand, setupWebhook, getHelp } from './telegram-commands.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1032,6 +1035,57 @@ const ADMIN_TOOLS = [
     }, required: ['base_url'] }
   },
 
+  // ── Deploy Log ────────────────────────────────────────────────────────────
+  {
+    name: 'log_deploy',
+    description: 'Zabilježi deployment projekta/sajta. Pozovi nakon svakog deploya.',
+    input_schema: { type: 'object', properties: {
+      project:    { type: 'string', description: 'Naziv projekta, npr. "digital-nature-website"' },
+      domain:     { type: 'string', description: 'Domena, npr. "digitalnature.at"' },
+      message:    { type: 'string', description: 'Kratki opis što je promijenjeno' },
+      files:      { type: 'number', description: 'Broj prenesenih fajlova' },
+      git_commit: { type: 'string', description: 'Git commit hash' },
+      status:     { type: 'string', enum: ['success','failed'], description: 'Default: success' }
+    }, required: ['project'] }
+  },
+  {
+    name: 'list_deploys',
+    description: 'Historija deploya — po projektu, domeni ili svi.',
+    input_schema: { type: 'object', properties: {
+      project: { type: 'string' },
+      domain:  { type: 'string' },
+      limit:   { type: 'number' }
+    }}
+  },
+  {
+    name: 'get_deploy_stats',
+    description: 'Statistika deploya — ukupno, danas, ovaj tjedan, po projektu.',
+    input_schema: { type: 'object', properties: {} }
+  },
+
+  // ── Backup Verifikator ────────────────────────────────────────────────────
+  {
+    name: 'check_backups',
+    description: 'Provjeri status backupa — jesu li ran uspješno i koliko su stari.',
+    input_schema: { type: 'object', properties: {
+      name: { type: 'string', description: 'Ime specifičnog backupa za provjeru. Ostavi prazno za sve.' }
+    }}
+  },
+
+  // ── Competitor Keyword Tracker ────────────────────────────────────────────
+  {
+    name: 'keyword_positions',
+    description: 'Trenutne keyword pozicije u Google za određenu domenu.',
+    input_schema: { type: 'object', properties: {
+      domain: { type: 'string', description: 'npr. "digitalnature.at"' }
+    }, required: ['domain'] }
+  },
+  {
+    name: 'check_keywords',
+    description: 'Pokreni keyword check za sve domene i vidi promjene pozicija.',
+    input_schema: { type: 'object', properties: {} }
+  },
+
   // ── Monitoring ────────────────────────────────────────────────────────────
   {
     name: 'uptime_status',
@@ -1814,6 +1868,49 @@ async function handleAdminTool(name, input) {
       return result;
     }
 
+    // ── Deploy Log ──────────────────────────────────────────────────────────
+    case 'log_deploy': {
+      const deploy = logDeploy(input);
+      await notifyDeploy(deploy);
+      return { ok: true, deploy };
+    }
+    case 'list_deploys': {
+      const deploys = listDeploys({ project: input.project, domain: input.domain, limit: input.limit });
+      return { count: deploys.length, deploys: formatDeployList(deploys) };
+    }
+    case 'get_deploy_stats': {
+      return getDeployStats();
+    }
+
+    // ── Backup ──────────────────────────────────────────────────────────────
+    case 'check_backups': {
+      if (input.name) {
+        const r = await checkSingleBackup(input.name);
+        return r;
+      }
+      const msg = await formatBackupReport();
+      return { formatted: msg };
+    }
+
+    // ── Competitor Keywords ──────────────────────────────────────────────────
+    case 'keyword_positions': {
+      const positions = getCurrentPositions(input.domain);
+      if (!positions.length) return { message: `Nema podataka za ${input.domain}. Pokreni check_keywords.` };
+      const formatted = await formatKeywordReport(input.domain);
+      return { formatted, positions };
+    }
+    case 'check_keywords': {
+      const result = await checkAllKeywords();
+      if (result.error) return result;
+      if (!result.changes.length) return { message: 'Nema značajnih promjena pozicija.' };
+      const alerts = [];
+      for (const { domain, changes } of result.changes) {
+        const msg = await formatChangesAlert(domain, changes);
+        if (msg) { alerts.push(msg); await sendTelegram(msg); }
+      }
+      return { ok: true, changes: result.changes.length, alerts };
+    }
+
     // ── Monitoring ──────────────────────────────────────────────────────────
     case 'uptime_status': {
       if (!MONITOR_SITES_LIST.length) return { error: 'MONITOR_SITES nije konfiguriran u .env' };
@@ -2399,6 +2496,23 @@ cron.schedule('0 9 1 * *', async () => {
   await sendBillingReminders();
 }, { timezone: 'Europe/Vienna' });
 
+// ── Cron: Backup check (svaki dan 8:30) ──────────────────────────────────────
+cron.schedule('30 8 * * *', async () => {
+  await checkAllBackups();
+}, { timezone: 'Europe/Vienna' });
+
+// ── Cron: Keyword check (srijeda 9:00) ───────────────────────────────────────
+cron.schedule('0 9 * * 3', async () => {
+  console.log('[CRON] Keyword position check...');
+  const result = await checkAllKeywords();
+  if (result.changes?.length) {
+    for (const { domain, changes } of result.changes) {
+      const msg = await formatChangesAlert(domain, changes);
+      if (msg) await sendTelegram(msg);
+    }
+  }
+}, { timezone: 'Europe/Vienna' });
+
 // ── Cron: Weekly SEO Report (ponedjeljak 8:00) ───────────────────────────────
 cron.schedule('0 8 * * 1', async () => {
   if (!isSeoConfigured()) return;
@@ -2491,6 +2605,33 @@ registerCommand('invoices', 'Financijski pregled faktura', async () => {
     `Outstanding: <b>€${stats.outstanding.toFixed(2)}</b>\n` +
     `Drafts: ${stats.draft} | Sent: ${stats.sent} | Paid: ${stats.paid}`
   );
+});
+
+registerCommand('deploys', 'Zadnjih 10 deploya', async () => {
+  const stats   = getDeployStats();
+  const deploys = listDeploys({ limit: 10 });
+  const lines   = [
+    `🚀 <b>Deploy Log</b>`,
+    `Danas: ${stats.today} | Tjedan: ${stats.week} | Ukupno: ${stats.total}`,
+    '',
+    formatDeployList(deploys),
+  ];
+  await sendTelegram(lines.join('\n'));
+});
+
+registerCommand('backups', 'Status svih backupa', async () => {
+  const msg = await formatBackupReport();
+  await sendTelegram(msg);
+});
+
+registerCommand('keywords', 'Keyword pozicije za sve sajtove', async () => {
+  const { KEYWORD_CONFIG } = await import('./competitor.js').catch(() => ({ KEYWORD_CONFIG: [] }));
+  const domains = (process.env.COMPETITOR_KEYWORDS ? JSON.parse(process.env.COMPETITOR_KEYWORDS) : []).map(c => c.domain);
+  if (!domains.length) return sendTelegram('⚠️ COMPETITOR_KEYWORDS nije konfiguriran.');
+  for (const domain of domains) {
+    const msg = await formatKeywordReport(domain);
+    await sendTelegram(msg);
+  }
 });
 
 registerCommand('help', 'Lista svih komandi', async () => {
