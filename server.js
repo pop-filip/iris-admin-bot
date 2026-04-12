@@ -13,6 +13,8 @@ import { isConfigured as isSeoConfigured, SEO_SITES, getSeoReport, formatSeoRepo
 import { checkAllSites, getUptimeStats, formatUptimeReport, MONITOR_SITES_LIST } from './monitor.js';
 import { checkAllSSL, checkAllDomains, getSSLStatus, formatSSLReport } from './ssl.js';
 import { checkAndAlert, getHealthSummary, formatHealthReport, registerHealthEndpoint } from './health.js';
+import { addLead, listLeads, getLeadById, updateLeadStatus, getLeadStats, notifyNewLead, formatLead } from './leads.js';
+import { registerTelegramWebhook, registerCommand, setupWebhook, getHelp } from './telegram-commands.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -77,24 +79,27 @@ const TOOLS = [
 ];
 
 // ── System Prompt ─────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `Du bist Iris, eine freundliche Beraterin für ${SHOP_NAME} (${SHOP_DOMAIN}).
+const SYSTEM_PROMPT = `Ti si Iris, AI admin asistent za Digital Nature (digitalnature.at).
+Admin si za Filipa Popa — web agencija u Linzu, Austrija.
 
-WICHTIG: Wenn ein Kunde nach Produkten, Preisen oder Verfügbarkeit fragt, nutze IMMER das search_products Tool.
-Antworte NICHT aus dem Gedächtnis über Preise — echte Preise kommen aus dem Katalog.
+ŠTO MOŽEŠ RADITI:
+- SEO: seo_report, submit_sitemap, check_indexing, request_indexing
+- Monitoring: uptime_status, ssl_status, server_health
+- Leads: list_leads, get_lead, update_lead_status, get_lead_stats
+- Dropshipping (${SHOP_NAME}): search_products, add_product, list_orders, itd.
+- Sistem: send_summary, test_notification, list_seo_sites
+- Webhook setup: setup_telegram_webhook
 
-DEINE AUFGABEN:
-- Hilf Kunden beim Finden der richtigen Produkte
-- Nutze search_products um echte Preise und Verfügbarkeit zu zeigen
-- Erkläre Unterschiede zwischen Produkten
-- Gib praktische Hinweise wenn hilfreich
+PONAŠANJE:
+- Odgovaraj na hrvatskom (ili na jeziku na kojem te pitaju)
+- Buди koncizan i direktan — imaš puno alata, koristi ih odmah
+- Uvijek koristi tools kad su relevantni, ne odgovaraj iz memorije
+- Formatuj odgovore čitljivo za Telegram (HTML bold, code)
 
-BEIM ANZEIGEN VON PRODUKTEN:
-- Zeige max. 3-4 Ergebnisse
-- Format: **Produktname** — €Preis (Marke)
-- Erkläre kurz warum das Produkt passt
-- Füge den Shop-Link hinzu wenn vorhanden
-
-Antworte immer auf Deutsch, freundlich und kompetent. Halte Antworten kurz und praktisch.`;
+KONTEKST:
+- Server: Hetzner VPS 157.180.67.68, Docker + Traefik
+- Live sajtovi: digitalnature.at, matografie.at i klijentski sajtovi
+- Dropshipping shop: ${SHOP_NAME} (${SHOP_DOMAIN})`;
 
 // ── Tool Handler ──────────────────────────────────────────────────────────────
 function handleToolCall(toolName, toolInput) {
@@ -826,6 +831,44 @@ const ADMIN_TOOLS = [
     input_schema: { type: 'object', properties: {} }
   },
 
+  // ── Leads ─────────────────────────────────────────────────────────────────
+  {
+    name: 'list_leads',
+    description: 'Prikaži listu upita/leadova sa digitalnature.at. Možeš filtrirati po statusu.',
+    input_schema: { type: 'object', properties: {
+      status: { type: 'string', enum: ['new', 'contacted', 'negotiating', 'won', 'lost'], description: 'Filter po statusu. Ostavi prazno za sve.' },
+      limit:  { type: 'number', description: 'Broj rezultata, default 20.' }
+    }}
+  },
+  {
+    name: 'get_lead',
+    description: 'Dohvati detalje jednog leada po ID-u.',
+    input_schema: { type: 'object', properties: {
+      id: { type: 'number', description: 'ID leada' }
+    }, required: ['id'] }
+  },
+  {
+    name: 'update_lead_status',
+    description: 'Ažuriraj status leada. Statusi: new → contacted → negotiating → won / lost',
+    input_schema: { type: 'object', properties: {
+      id:     { type: 'number', description: 'ID leada' },
+      status: { type: 'string', enum: ['new', 'contacted', 'negotiating', 'won', 'lost'] },
+      notes:  { type: 'string', description: 'Opcionalne bilješke (šta je dogovoreno, itd.)' }
+    }, required: ['id', 'status'] }
+  },
+  {
+    name: 'get_lead_stats',
+    description: 'Prikaži statistiku leadova — koliko je novih, kontaktiranih, won/lost.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'setup_telegram_webhook',
+    description: 'Registruj Telegram webhook na Iris serveru da možeš primati komande direktno iz Telegrama.',
+    input_schema: { type: 'object', properties: {
+      base_url: { type: 'string', description: 'Base URL Iris servera, npr. https://iris.digitalnature.at' }
+    }, required: ['base_url'] }
+  },
+
   // ── Monitoring ────────────────────────────────────────────────────────────
   {
     name: 'uptime_status',
@@ -1495,6 +1538,34 @@ async function handleAdminTool(name, input) {
       return { configured: true, sites: SEO_SITES.map(s => ({ name: s.name, domain: s.domain })) };
     }
 
+    // ── Leads ───────────────────────────────────────────────────────────────
+    case 'list_leads': {
+      const leads = listLeads({ status: input.status, limit: input.limit || 20 });
+      if (!leads.length) return { message: 'Nema leadova.', count: 0 };
+      return { count: leads.length, leads: leads.map(formatLead) };
+    }
+
+    case 'get_lead': {
+      const lead = getLeadById(input.id);
+      if (!lead) return { error: `Lead #${input.id} ne postoji.` };
+      return lead;
+    }
+
+    case 'update_lead_status': {
+      const updated = updateLeadStatus(input.id, input.status, input.notes);
+      if (!updated) return { error: `Lead #${input.id} ne postoji.` };
+      return { ok: true, lead: updated };
+    }
+
+    case 'get_lead_stats': {
+      return getLeadStats();
+    }
+
+    case 'setup_telegram_webhook': {
+      const result = await setupWebhook(input.base_url);
+      return result;
+    }
+
     // ── Monitoring ──────────────────────────────────────────────────────────
     case 'uptime_status': {
       if (!MONITOR_SITES_LIST.length) return { error: 'MONITOR_SITES nije konfiguriran u .env' };
@@ -2090,11 +2161,77 @@ cron.schedule('0 8 * * 1', async () => {
 // ── Health endpoint ───────────────────────────────────────────────────────────
 registerHealthEndpoint(app);
 
+// ── Lead intake endpoint ──────────────────────────────────────────────────────
+app.post('/api/lead', async (req, res) => {
+  const { name, email, phone, message, source, budget, service } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email je obavezan.' });
+
+  try {
+    const lead = addLead({ name, email, phone, message, source, budget, service });
+    await notifyNewLead(lead);
+    res.json({ ok: true, id: lead.id });
+  } catch (e) {
+    console.error('[Lead] Greška:', e.message);
+    res.status(500).json({ error: 'Greška pri spremanju upite.' });
+  }
+});
+
+// ── Telegram webhook ──────────────────────────────────────────────────────────
+registerTelegramWebhook(app);
+
 // ── Static files ──────────────────────────────────────────────────────────────
 app.use(express.static(join(__dirname, 'html')));
 
-app.listen(PORT, () => {
+// ── Telegram komande registracija ─────────────────────────────────────────────
+registerCommand('status', 'Uptime svih sajtova + server health', async () => {
+  const [uptime, health] = await Promise.all([
+    Promise.resolve(formatUptimeReport()),
+    formatHealthReport(),
+  ]);
+  await sendTelegram(`${uptime}\n\n${health}`);
+});
+
+registerCommand('seo', 'Weekly SEO report za sve sajtove', async () => {
+  if (!isSeoConfigured()) return sendTelegram('⚠️ SEO agent nije konfiguriran (nema Google credentials).');
+  const msg = await formatWeeklyReportAll(7);
+  await sendTelegram(msg);
+});
+
+registerCommand('ssl', 'SSL certifikati i domain expiry', async () => {
+  const msg = await formatSSLReport();
+  await sendTelegram(msg);
+});
+
+registerCommand('leads', 'Lista novih upita sa digitalnature.at', async () => {
+  const leads = listLeads({ status: 'new', limit: 10 });
+  const stats = getLeadStats();
+  if (!leads.length) return sendTelegram(`📋 <b>Leads</b>\nNema novih upita.\nUkupno: ${stats.total}`);
+  const lines = [`📋 <b>Leads — novi (${leads.length})</b>\n`];
+  leads.forEach(l => lines.push(formatLead(l) + '\n'));
+  lines.push(`Ukupno: ${stats.total} | Won: ${stats.won} | Lost: ${stats.lost}`);
+  await sendTelegram(lines.join('\n'));
+});
+
+registerCommand('health', 'Server CPU/RAM/disk + Docker containeri', async () => {
+  const msg = await formatHealthReport();
+  await sendTelegram(msg);
+});
+
+registerCommand('help', 'Lista svih komandi', async () => {
+  await sendTelegram(getHelp());
+});
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+app.listen(PORT, async () => {
   console.log(`✓ Iris Admin Bot — ${SHOP_NAME} — Port ${PORT}`);
   console.log(`✓ Katalog: ${countProducts()} Produkte`);
   console.log(`✓ Admin panel: http://localhost:${PORT}/admin.html`);
+
+  // Startup Telegram notifikacija
+  const startMsg =
+    `✅ <b>Iris je online</b>\n` +
+    `🕐 ${new Date().toLocaleString('de-AT', { timeZone: 'Europe/Vienna' })}\n` +
+    `📡 Monitoring: ${MONITOR_SITES_LIST.length} sajtova\n` +
+    `🛒 Katalog: ${countProducts()} proizvoda`;
+  await sendTelegram(startMsg);
 });
