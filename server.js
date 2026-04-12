@@ -9,6 +9,7 @@ import { dirname, join } from 'path';
 import { searchProducts, countProducts, listProducts, addProduct, updateProduct, deleteProduct, getProductBySku, getCategories, logAudit, getAuditLog, exportProducts, findMissingData, getFeatured, setFeatured, getMarginReport, updateBuyPrice, addSupplier, listSuppliers, getSupplierByName, linkProductSupplier, getSupplierReport, addPriceRule, listPriceRules, deletePriceRule, applyPriceRules, getLowMarginProducts, updateSupplierFeed, getSuppliersWithFeed, syncSupplierFeed, executeSmartImport, getDailySummary, addOemNumber, searchByOem, listOemNumbers, removeOemNumber, setAlternative, getAlternatives, autoFindAlternatives, findByVehicle, getCompatibleMakes, setShippingInfo, getHazmatList, getShippingReport, addOrder, getOrder, listOrders, updateOrderStatus, setTracking, getOrderStats, listUnshipped, addRefund, getRefund, listRefunds, updateRefundStatus, getRefundStats } from './db/database.js';
 import { sendTelegram, formatOosAlert, formatPriceAlert } from './notify.js';
 import { sendEmail, buildSupplierOrderEmail, buildOrderConfirmationEmail, buildShippingNotificationEmail, buildRefundReceivedEmail, buildRefundApprovedEmail } from './email.js';
+import { isConfigured as isSeoConfigured, SEO_SITES, getSeoReport, formatSeoReportTelegram, formatWeeklyReportAll, submitSitemap, checkIndexing, requestIndexing, getGA4Report, getSearchConsoleReport } from './seo.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -757,6 +758,71 @@ const ADMIN_TOOLS = [
     input_schema: { type: 'object', properties: {} }
   },
 
+  // ── SEO Agent ─────────────────────────────────────────────────────────────
+  {
+    name: 'seo_report',
+    description: 'Povuci kompletan SEO report za jedan ili sve sajtove: GA4 traffic, pageviews, bounce rate, top stranice, konverzije (CTA/contact klikovi, video plays), Google Search impressions, klikovi, CTR, prosječna pozicija, top keywords, mobile vs desktop split.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: {
+          type: 'string',
+          description: 'Domena sajta, npr. "digitalnature.at" ili "matografie.at". Ako nije navedeno, prikaži sve sajtove.'
+        },
+        days: {
+          type: 'number',
+          description: 'Broj dana za izvještaj. Default: 7. Može biti 7, 14, 28, 30, 90.'
+        }
+      }
+    }
+  },
+  {
+    name: 'submit_sitemap',
+    description: 'Submitaj sitemap.xml na Google Search Console za određeni sajt. Koristiti nakon svakog deploya.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: {
+          type: 'string',
+          description: 'Domena sajta, npr. "digitalnature.at"'
+        }
+      },
+      required: ['domain']
+    }
+  },
+  {
+    name: 'check_indexing',
+    description: 'Provjeri indexing status sajtova u Google Search Console — koliko URL-a je indexirano, ima li grešaka ili upozorenja.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: {
+          type: 'string',
+          description: 'Domena sajta. Ako nije navedeno, provjeri sve.'
+        }
+      }
+    }
+  },
+  {
+    name: 'request_indexing',
+    description: 'Zatraži od Googlea da (re)indexira određeni URL. Korisno nakon promjene sadržaja na stranici.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Puni URL koji treba indexirati, npr. "https://digitalnature.at/iris.html"'
+        }
+      },
+      required: ['url']
+    }
+  },
+  {
+    name: 'list_seo_sites',
+    description: 'Prikaži sve konfigurirane sajtove za SEO monitoring.',
+    input_schema: { type: 'object', properties: {} }
+  },
+
   // ── Supplier Sync ─────────────────────────────────────────────────────────
   {
     name: 'set_supplier_feed',
@@ -1368,6 +1434,45 @@ async function handleAdminTool(name, input) {
       };
     }
 
+    // ── SEO Agent ───────────────────────────────────────────────────────────
+    case 'seo_report': {
+      if (!isSeoConfigured()) return { error: 'SEO agent nije konfiguriran. Dodaj GOOGLE_SERVICE_ACCOUNT_KEY_PATH i SEO_SITES u .env' };
+      const days = input.days || 7;
+      if (input.domain) {
+        const data = await getSeoReport(input.domain, days);
+        return data;
+      }
+      // Svi sajtovi
+      const all = await Promise.all(SEO_SITES.map(s => getSeoReport(s.domain, days)));
+      return { sites: all };
+    }
+
+    case 'submit_sitemap': {
+      if (!isSeoConfigured()) return { error: 'SEO agent nije konfiguriran.' };
+      const result = await submitSitemap(input.domain);
+      if (result.ok) {
+        await sendTelegram(`🗺 <b>Sitemap submitan</b>\n${result.domain}/sitemap.xml\nIndexirano: ${result.indexed} URL-a`);
+      }
+      return result;
+    }
+
+    case 'check_indexing': {
+      if (!isSeoConfigured()) return { error: 'SEO agent nije konfiguriran.' };
+      if (input.domain) return await checkIndexing(input.domain);
+      const results = await Promise.all(SEO_SITES.map(s => checkIndexing(s.domain)));
+      return { sites: results };
+    }
+
+    case 'request_indexing': {
+      if (!isSeoConfigured()) return { error: 'SEO agent nije konfiguriran.' };
+      return await requestIndexing(input.url);
+    }
+
+    case 'list_seo_sites': {
+      if (!isSeoConfigured()) return { error: 'SEO agent nije konfiguriran. Dodaj GOOGLE_SERVICE_ACCOUNT_KEY_PATH i SEO_SITES u .env', configured: false };
+      return { configured: true, sites: SEO_SITES.map(s => ({ name: s.name, domain: s.domain })) };
+    }
+
     // ── Supplier Sync ───────────────────────────────────────────────────────
     case 'set_supplier_feed': {
       const sup = getSupplierByName(input.supplier);
@@ -1519,6 +1624,42 @@ app.get('/api/products/categories', (req, res) => {
 // ── Health Check ──────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'iris-admin-bot', shop: SHOP_NAME, products: countProducts() });
+});
+
+// ── Proposal Tracker ──────────────────────────────────────────────────────────
+// Prima open/close evente s proposal stranica i šalje Telegram notifikaciju
+const trackLimiter = rateLimit({ windowMs: 60 * 1000, max: 20 });
+app.post('/api/track', trackLimiter, cors({ origin: '*' }), async (req, res) => {
+  const { event, page, duration, ua } = req.body || {};
+  if (!event || !page) return res.status(400).json({ error: 'missing fields' });
+
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '?';
+  const time = new Date().toLocaleString('de-AT', { timeZone: 'Europe/Vienna' });
+  const device = /Mobile|Android|iPhone/i.test(ua || '') ? '📱 Mobil' : '💻 Desktop';
+
+  let msg = '';
+  if (event === 'open') {
+    msg = `👁 <b>Proposal geöffnet!</b>\n\n` +
+          `📄 Seite: <b>${page}</b>\n` +
+          `${device}\n` +
+          `🌐 IP: <code>${ip}</code>\n` +
+          `🕐 Zeit: ${time}`;
+  } else if (event === 'close') {
+    const min = Math.floor((duration || 0) / 60);
+    const sec = (duration || 0) % 60;
+    const timeStr = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
+    const verdict = (duration || 0) > 120 ? '🔥 Liest intensiv!' : (duration || 0) > 30 ? '👍 Interessiert' : '👀 Kurzer Blick';
+    msg = `⏱ <b>Proposal geschlossen</b>\n\n` +
+          `📄 Seite: <b>${page}</b>\n` +
+          `⏳ Verweildauer: <b>${timeStr}</b>\n` +
+          `${verdict}\n` +
+          `🕐 Zeit: ${time}`;
+  } else if (event === 'scroll') {
+    msg = `📜 <b>Bis zum Angebot gescrollt!</b>\n📄 ${page} — ${time}`;
+  }
+
+  if (msg) await sendTelegram(msg);
+  res.json({ ok: true });
 });
 
 // ── Google Shopping Feed ─────────────────────────────────────────────────────
@@ -1868,6 +2009,19 @@ cron.schedule(SUMMARY_SCHEDULE, async () => {
   const msg = buildDailySummary(summary);
   const result = await sendTelegram(msg);
   console.log('[CRON] Summary:', result.ok ? 'poslano' : result.reason);
+}, { timezone: 'Europe/Vienna' });
+
+// ── Cron: Weekly SEO Report (ponedjeljak 8:00) ───────────────────────────────
+cron.schedule('0 8 * * 1', async () => {
+  if (!isSeoConfigured()) return;
+  console.log('[CRON] Weekly SEO report...');
+  try {
+    const msg = await formatWeeklyReportAll(7);
+    await sendTelegram(`📊 <b>Weekly SEO Report</b>\n\n${msg}`);
+    console.log('[CRON] SEO report poslan na Telegram');
+  } catch (e) {
+    console.error('[CRON] SEO report greška:', e.message);
+  }
 }, { timezone: 'Europe/Vienna' });
 
 // ── Static files ──────────────────────────────────────────────────────────────
