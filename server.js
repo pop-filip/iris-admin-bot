@@ -20,6 +20,10 @@ import { createInvoice, getInvoiceById, getInvoiceByNumber, listInvoices, update
 import { logDeploy, listDeploys, getLastDeploy, getDeployStats, notifyDeploy, formatDeployList } from './deploylog.js';
 import { checkAllBackups, checkSingleBackup, formatBackupReport } from './backup.js';
 import { fetchKeywordPositions, checkAllKeywords, getCurrentPositions, formatKeywordReport, formatChangesAlert } from './competitor.js';
+import { sendWeeklyDigest, buildWeeklyDigest } from './digest.js';
+import { logTime, listTimeEntries, getMonthSummary as getTimeSummary, getUnbilledSummary, markAsBilled, getTimeStats, formatUnbilledSummary, formatMonthSummary as formatTimeSummary } from './timetrack.js';
+import { checkAllSites as checkAllPageSpeed, getAllLatestScores, getScoreHistory, formatPerfReport } from './pagespeed.js';
+import { getRevenueDashboard, formatRevenueDashboard, saveMrrSnapshot, getMrrHistory, getPipelineValue } from './revenue.js';
 import { registerTelegramWebhook, registerCommand, setupWebhook, getHelp } from './telegram-commands.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1158,6 +1162,115 @@ const ADMIN_TOOLS = [
         limit:    { type: 'number', description: 'Max broj proizvoda, default 5' }
       }
     }
+  },
+
+  // ── Time Tracker ──────────────────────────────────────────────────────────
+  {
+    name: 'log_time',
+    description: 'Zabilježi sate rada na projektu/klijentu.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        project:     { type: 'string',  description: 'Naziv projekta' },
+        hours:       { type: 'number',  description: 'Broj sati (npr. 1.5)' },
+        description: { type: 'string',  description: 'Opis rada (opcionalno)' },
+        client_id:   { type: 'number',  description: 'ID klijenta (opcionalno)' },
+        date:        { type: 'string',  description: 'Datum YYYY-MM-DD (default: danas)' },
+        billable:    { type: 'boolean', description: 'Da li je billable (default: true)' }
+      },
+      required: ['project', 'hours']
+    }
+  },
+  {
+    name: 'list_time',
+    description: 'Lista unesenih sati — po klijentu, projektu ili mjesecu.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'number', description: 'Filter po klijentu' },
+        project:   { type: 'string', description: 'Filter po projektu' },
+        month:     { type: 'string', description: 'Mjesec YYYY-MM (default: tekući)' }
+      }
+    }
+  },
+  {
+    name: 'unbilled_hours',
+    description: 'Prikaži sve nefakturirane (billable) sate grupirane po klijentu/projektu.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'mark_billed',
+    description: 'Označi sate kao fakturirani po ID-ovima.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ids: { type: 'array', items: { type: 'number' }, description: 'Lista ID-ova time_entries za označiti' }
+      },
+      required: ['ids']
+    }
+  },
+  {
+    name: 'time_stats',
+    description: 'Statistika sati — ukupno, ovaj mjesec, nefakturirano, top projekti.',
+    input_schema: { type: 'object', properties: {} }
+  },
+
+  // ── Revenue Dashboard ─────────────────────────────────────────────────────
+  {
+    name: 'revenue_dashboard',
+    description: 'Prikaz MRR, pipeline vrijednosti, faktura i lead conversion rate — full agency financial overview.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'mrr_history',
+    description: 'Historija MRR snapshota — trend rasta agencije.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        months: { type: 'number', description: 'Koliko mjeseci historije (default: 6)' }
+      }
+    }
+  },
+  {
+    name: 'pipeline_value',
+    description: 'Vrijednost sales pipelinea — otvoreni leadi i procijenjeni prihod.',
+    input_schema: { type: 'object', properties: {} }
+  },
+
+  // ── Performance (PageSpeed) ───────────────────────────────────────────────
+  {
+    name: 'perf_check',
+    description: 'Pokreni Google PageSpeed Insights check za sve sajtove (ili jedan URL) i spremi rezultate.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Specifičan URL za check (opcionalno, bez = svi)' }
+      }
+    }
+  },
+  {
+    name: 'perf_scores',
+    description: 'Prikaži zadnje Performance/Accessibility/SEO scorove za sve sajtove.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'perf_history',
+    description: 'Historija performance scorova za domenu.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena' },
+        days:   { type: 'number', description: 'Broj dana historije (default: 30)' }
+      },
+      required: ['domain']
+    }
+  },
+
+  // ── Weekly Digest ─────────────────────────────────────────────────────────
+  {
+    name: 'weekly_digest',
+    description: 'Generiši i pošalji tjedni digest na Telegram — leads, MRR, deployi, uptime summary.',
+    input_schema: { type: 'object', properties: {} }
   }
 ];
 
@@ -1994,6 +2107,65 @@ async function handleAdminTool(name, input) {
       return { success: true, generated: results.length, products: results };
     }
 
+    // ── Time Tracker ────────────────────────────────────────────────────────
+    case 'log_time': {
+      const entry = logTime({
+        clientId:    input.client_id,
+        project:     input.project,
+        description: input.description,
+        hours:       input.hours,
+        date:        input.date,
+        billable:    input.billable !== false,
+      });
+      return { ok: true, entry };
+    }
+    case 'list_time': {
+      const month = input.month || new Date().toISOString().slice(0, 7);
+      const entries = listTimeEntries({ clientId: input.client_id, project: input.project, month });
+      return { entries, count: entries.length };
+    }
+    case 'unbilled_hours':
+      return { report: formatUnbilledSummary(), raw: getUnbilledSummary() };
+    case 'mark_billed': {
+      const n = markAsBilled(input.ids);
+      return { ok: true, marked: n };
+    }
+    case 'time_stats':
+      return getTimeStats();
+
+    // ── Revenue Dashboard ────────────────────────────────────────────────────
+    case 'revenue_dashboard':
+      return { report: formatRevenueDashboard(), raw: getRevenueDashboard() };
+    case 'mrr_history':
+      return { history: getMrrHistory(input.months || 6) };
+    case 'pipeline_value':
+      return getPipelineValue();
+
+    // ── Performance (PageSpeed) ──────────────────────────────────────────────
+    case 'perf_check': {
+      if (input.url) {
+        const { checkPageSpeed } = await import('./pagespeed.js');
+        const domain = new URL(input.url).hostname;
+        const score = await checkPageSpeed(input.url, 'mobile');
+        return score;
+      }
+      const results = await checkAllPageSpeed();
+      return { results };
+    }
+    case 'perf_scores':
+      return { report: await formatPerfReport(), scores: getAllLatestScores() };
+    case 'perf_history': {
+      const history = getScoreHistory(input.domain, input.days || 30);
+      return { domain: input.domain, history };
+    }
+
+    // ── Weekly Digest ────────────────────────────────────────────────────────
+    case 'weekly_digest': {
+      const msg = await buildWeeklyDigest();
+      await sendTelegram(msg);
+      return { ok: true, message: 'Digest poslan na Telegram.' };
+    }
+
     default: return { error: 'Nepoznat tool.' };
   }
 }
@@ -2513,6 +2685,22 @@ cron.schedule('0 9 * * 3', async () => {
   }
 }, { timezone: 'Europe/Vienna' });
 
+// ── Cron: Weekly Digest (ponedjeljak 7:00) ───────────────────────────────────
+cron.schedule('0 7 * * 1', async () => {
+  console.log('[CRON] Weekly digest...');
+  try {
+    await sendWeeklyDigest();
+    saveMrrSnapshot();
+  } catch (e) { console.error('[CRON] Digest greška:', e.message); }
+}, { timezone: 'Europe/Vienna' });
+
+// ── Cron: Performance Check (utorak 9:00) ────────────────────────────────────
+cron.schedule('0 9 * * 2', async () => {
+  console.log('[CRON] PageSpeed check...');
+  try { await checkAllPageSpeed(); }
+  catch (e) { console.error('[CRON] PageSpeed greška:', e.message); }
+}, { timezone: 'Europe/Vienna' });
+
 // ── Cron: Weekly SEO Report (ponedjeljak 8:00) ───────────────────────────────
 cron.schedule('0 8 * * 1', async () => {
   if (!isSeoConfigured()) return;
@@ -2632,6 +2820,26 @@ registerCommand('keywords', 'Keyword pozicije za sve sajtove', async () => {
     const msg = await formatKeywordReport(domain);
     await sendTelegram(msg);
   }
+});
+
+registerCommand('revenue', 'Revenue dashboard — MRR, pipeline, fakture', async () => {
+  const msg = formatRevenueDashboard();
+  await sendTelegram(msg);
+});
+
+registerCommand('time', 'Nefakturirani sati i statistika', async () => {
+  const msg = formatUnbilledSummary();
+  const stats = getTimeStats();
+  await sendTelegram(`${msg}\n\n⏱ Ovaj mj: ${stats.thisMonth}h | Ukupno: ${stats.total}h`);
+});
+
+registerCommand('perf', 'Performance scorovi za sve sajtove', async () => {
+  const msg = await formatPerfReport();
+  await sendTelegram(msg);
+});
+
+registerCommand('digest', 'Tjedni digest — sve informacije na jednom mjestu', async () => {
+  await sendWeeklyDigest();
 });
 
 registerCommand('help', 'Lista svih komandi', async () => {
