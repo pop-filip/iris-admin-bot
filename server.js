@@ -21,6 +21,7 @@ import { logDeploy, listDeploys, getLastDeploy, getDeployStats, notifyDeploy, fo
 import { checkAllBackups, checkSingleBackup, formatBackupReport } from './backup.js';
 import { fetchKeywordPositions, checkAllKeywords, getCurrentPositions, formatKeywordReport, formatChangesAlert } from './competitor.js';
 import { sendWeeklyDigest, buildWeeklyDigest } from './digest.js';
+import { listSites, readSiteFile, writeSiteFile, listSiteFiles, auditSeoPage, auditSeoSite, addJsonLdSchema, addOrUpdateMetaTags, updateSitemap, gitCommitAndDeploy, formatSeoAudit } from './webops.js';
 import { logTime, listTimeEntries, getMonthSummary as getTimeSummary, getUnbilledSummary, markAsBilled, getTimeStats, formatUnbilledSummary, formatMonthSummary as formatTimeSummary } from './timetrack.js';
 import { checkAllSites as checkAllPageSpeed, getAllLatestScores, getScoreHistory, formatPerfReport } from './pagespeed.js';
 import { getRevenueDashboard, formatRevenueDashboard, saveMrrSnapshot, getMrrHistory, getPipelineValue } from './revenue.js';
@@ -1266,6 +1267,134 @@ const ADMIN_TOOLS = [
     }
   },
 
+  // ── Web Operations (SEO implementacija) ──────────────────────────────────
+  {
+    name: 'list_sites',
+    description: 'Lista konfiguriranih sajtova kojima Iris ima pristup za SEO izmjene.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'list_site_files',
+    description: 'Lista fajlova na sajtu — da vidiš koje stranice postoje.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta, npr. digitalnature.at' },
+        path:   { type: 'string', description: 'Direktorij (opcionalno, default: root)' }
+      },
+      required: ['domain']
+    }
+  },
+  {
+    name: 'read_site_file',
+    description: 'Pročitaj sadržaj HTML fajla ili sitemap.xml sa sajta.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' },
+        path:   { type: 'string', description: 'Path do fajla, npr. index.html ili sitemap.xml' }
+      },
+      required: ['domain', 'path']
+    }
+  },
+  {
+    name: 'write_site_file',
+    description: 'Upiši sadržaj u fajl na sajtu (automatski pravi backup .bak fajl).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain:  { type: 'string', description: 'Domena sajta' },
+        path:    { type: 'string', description: 'Path do fajla' },
+        content: { type: 'string', description: 'Novi sadržaj fajla' }
+      },
+      required: ['domain', 'path', 'content']
+    }
+  },
+  {
+    name: 'audit_seo_page',
+    description: 'Provjeri SEO jedne stranice — šta fali (title, meta description, canonical, og tags, schema, h1, alt tagovi).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' },
+        path:   { type: 'string', description: 'HTML fajl, npr. index.html ili usluge.html' }
+      },
+      required: ['domain', 'path']
+    }
+  },
+  {
+    name: 'audit_seo_site',
+    description: 'SEO audit cijelog sajta — provjeri sve HTML stranice i vidi prosječni score i šta fali.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' }
+      },
+      required: ['domain']
+    }
+  },
+  {
+    name: 'add_schema',
+    description: 'Dodaj ili zamijeni JSON-LD structured data schema na stranicu (LocalBusiness, FAQPage, Person, Organization, BreadcrumbList, Service...).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain:  { type: 'string', description: 'Domena sajta' },
+        path:    { type: 'string', description: 'HTML fajl' },
+        schema:  { type: 'object', description: 'Schema.org JSON objekat sa @context i @type' }
+      },
+      required: ['domain', 'path', 'schema']
+    }
+  },
+  {
+    name: 'add_meta_tags',
+    description: 'Dodaj ili ažuriraj meta tagove na stranicu: description, og:title, og:description, og:image, canonical, robots itd.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' },
+        path:   { type: 'string', description: 'HTML fajl' },
+        tags:   { type: 'object', description: 'Key-value par tagova, npr. {"description":"...", "og:image":"..."}' }
+      },
+      required: ['domain', 'path', 'tags']
+    }
+  },
+  {
+    name: 'update_sitemap',
+    description: 'Dodaj ili ažuriraj URL-e u sitemap.xml.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' },
+        urls:   {
+          type: 'array',
+          description: 'Lista URL objekata',
+          items: {
+            type: 'object',
+            properties: {
+              loc:        { type: 'string', description: 'Puni URL, npr. https://digitalnature.at/usluge.html' },
+              priority:   { type: 'string', description: '0.1 do 1.0' },
+              changefreq: { type: 'string', description: 'daily | weekly | monthly | yearly' }
+            }
+          }
+        }
+      },
+      required: ['domain', 'urls']
+    }
+  },
+  {
+    name: 'git_commit_deploy',
+    description: 'Commitaj sve promjene na sajtu i deployjaj (git add + commit + push).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain:  { type: 'string', description: 'Domena sajta' },
+        message: { type: 'string', description: 'Commit poruka' }
+      },
+      required: ['domain', 'message']
+    }
+  },
+
   // ── Weekly Digest ─────────────────────────────────────────────────────────
   {
     name: 'weekly_digest',
@@ -2157,6 +2286,49 @@ async function handleAdminTool(name, input) {
     case 'perf_history': {
       const history = getScoreHistory(input.domain, input.days || 30);
       return { domain: input.domain, history };
+    }
+
+    // ── Web Operations ───────────────────────────────────────────────────────
+    case 'list_sites':
+      return { sites: listSites() };
+
+    case 'list_site_files':
+      return listSiteFiles(input.domain, input.path || '');
+
+    case 'read_site_file':
+      return readSiteFile(input.domain, input.path);
+
+    case 'write_site_file':
+      return writeSiteFile(input.domain, input.path, input.content);
+
+    case 'audit_seo_page': {
+      const audit = auditSeoPage(input.domain, input.path);
+      return { ...audit, report: formatSeoAudit(audit) };
+    }
+
+    case 'audit_seo_site': {
+      const audit = auditSeoSite(input.domain);
+      return { ...audit, report: formatSeoAudit(audit) };
+    }
+
+    case 'add_schema': {
+      const result = addJsonLdSchema(input.domain, input.path, input.schema);
+      return result;
+    }
+
+    case 'add_meta_tags': {
+      const result = addOrUpdateMetaTags(input.domain, input.path, input.tags);
+      return result;
+    }
+
+    case 'update_sitemap': {
+      const result = updateSitemap(input.domain, input.urls);
+      return result;
+    }
+
+    case 'git_commit_deploy': {
+      const result = gitCommitAndDeploy(input.domain, input.message);
+      return result;
     }
 
     // ── Weekly Digest ────────────────────────────────────────────────────────
