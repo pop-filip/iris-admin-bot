@@ -14,6 +14,9 @@ import { checkAllSites, getUptimeStats, formatUptimeReport, MONITOR_SITES_LIST }
 import { checkAllSSL, checkAllDomains, getSSLStatus, formatSSLReport } from './ssl.js';
 import { checkAndAlert, getHealthSummary, formatHealthReport, registerHealthEndpoint } from './health.js';
 import { addLead, listLeads, getLeadById, updateLeadStatus, getLeadStats, notifyNewLead, formatLead } from './leads.js';
+import { addClient, getClientById, getClientByDomain, listClients, updateClient, getClientStats, addProject, updateProject, addClientNote, formatClient } from './clients.js';
+import { addActivity, markActivityDone, listActivities, getMonthSummary, getCarePlanClients, sendBillingReminders, formatCareSummary, currentMonth } from './careplan.js';
+import { createInvoice, getInvoiceById, getInvoiceByNumber, listInvoices, updateInvoiceStatus, getInvoiceStats, createCarePlanInvoice, formatInvoice } from './invoice.js';
 import { registerTelegramWebhook, registerCommand, setupWebhook, getHelp } from './telegram-commands.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -861,6 +864,166 @@ const ADMIN_TOOLS = [
     description: 'Prikaži statistiku leadova — koliko je novih, kontaktiranih, won/lost.',
     input_schema: { type: 'object', properties: {} }
   },
+  // ── Client CRM ────────────────────────────────────────────────────────────
+  {
+    name: 'add_client',
+    description: 'Dodaj novog klijenta u CRM.',
+    input_schema: { type: 'object', properties: {
+      name:        { type: 'string', description: 'Ime i prezime ili naziv firme' },
+      company:     { type: 'string' },
+      email:       { type: 'string' },
+      phone:       { type: 'string' },
+      domain:      { type: 'string', description: 'npr. digitalnature.at' },
+      plan:        { type: 'string', enum: ['none','basic','pro','premium','custom'] },
+      plan_price:  { type: 'number', description: 'Mjesečna cijena plana u EUR' },
+      notes:       { type: 'string' },
+      source:      { type: 'string', description: 'Odakle je klijent došao' }
+    }, required: ['name'] }
+  },
+  {
+    name: 'list_clients',
+    description: 'Lista klijenata. Filtriraj po statusu (active/paused/churned) ili planu.',
+    input_schema: { type: 'object', properties: {
+      status: { type: 'string', enum: ['active','paused','churned','prospect'] },
+      plan:   { type: 'string', enum: ['none','basic','pro','premium','custom'] }
+    }}
+  },
+  {
+    name: 'get_client',
+    description: 'Dohvati detalje klijenta — kontakt info, projekti, plan, bilješke.',
+    input_schema: { type: 'object', properties: {
+      id:     { type: 'number' },
+      domain: { type: 'string', description: 'Ili traži po domeni' }
+    }}
+  },
+  {
+    name: 'update_client',
+    description: 'Ažuriraj podatke klijenta (plan, kontakt, status, itd.).',
+    input_schema: { type: 'object', properties: {
+      id:         { type: 'number', description: 'ID klijenta' },
+      name:       { type: 'string' },
+      email:      { type: 'string' },
+      phone:      { type: 'string' },
+      plan:       { type: 'string', enum: ['none','basic','pro','premium','custom'] },
+      plan_price: { type: 'number' },
+      status:     { type: 'string', enum: ['active','paused','churned','prospect'] },
+      notes:      { type: 'string' }
+    }, required: ['id'] }
+  },
+  {
+    name: 'get_client_stats',
+    description: 'Statistika klijenata — ukupno, aktivni, MRR (monthly recurring revenue).',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'add_client_note',
+    description: 'Dodaj bilješku na klijenta (meeting notes, dogovor, itd.).',
+    input_schema: { type: 'object', properties: {
+      client_id: { type: 'number' },
+      note:      { type: 'string' },
+      type:      { type: 'string', description: 'meeting / call / email / general' }
+    }, required: ['client_id','note'] }
+  },
+  {
+    name: 'add_project',
+    description: 'Dodaj projekt za klijenta.',
+    input_schema: { type: 'object', properties: {
+      client_id:   { type: 'number' },
+      name:        { type: 'string' },
+      description: { type: 'string' },
+      type:        { type: 'string', description: 'website / chatbot / maintenance / seo / custom' },
+      price:       { type: 'number' },
+      status:      { type: 'string', enum: ['active','completed','paused','cancelled'] }
+    }, required: ['client_id','name'] }
+  },
+
+  // ── Care Plan ──────────────────────────────────────────────────────────────
+  {
+    name: 'add_care_activity',
+    description: 'Evidentiraj aktivnost urađenu za klijenta u sklopu Care Plana.',
+    input_schema: { type: 'object', properties: {
+      client_id:   { type: 'number' },
+      type:        { type: 'string', description: 'deploy / update / backup / seo / support / fix / report' },
+      description: { type: 'string' },
+      duration:    { type: 'number', description: 'Sati rada (npr. 0.5)' },
+      month:       { type: 'string', description: 'YYYY-MM format, default = trenutni mjesec' }
+    }, required: ['client_id','type'] }
+  },
+  {
+    name: 'mark_activity_done',
+    description: 'Označi Care Plan aktivnost kao završenu.',
+    input_schema: { type: 'object', properties: {
+      id: { type: 'number', description: 'ID aktivnosti' }
+    }, required: ['id'] }
+  },
+  {
+    name: 'get_care_summary',
+    description: 'Pregled Care Plan aktivnosti za klijenta u određenom mjesecu.',
+    input_schema: { type: 'object', properties: {
+      client_id: { type: 'number' },
+      month:     { type: 'string', description: 'YYYY-MM, default = trenutni' }
+    }, required: ['client_id'] }
+  },
+  {
+    name: 'list_care_clients',
+    description: 'Lista svih klijenata koji imaju aktivan Care Plan.',
+    input_schema: { type: 'object', properties: {} }
+  },
+
+  // ── Invoices ───────────────────────────────────────────────────────────────
+  {
+    name: 'create_invoice',
+    description: 'Kreiraj novu fakturu za klijenta.',
+    input_schema: { type: 'object', properties: {
+      client_id: { type: 'number' },
+      items:     { type: 'array', description: 'Stavke: [{ description, qty, unit_price }]',
+                   items: { type: 'object', properties: {
+                     description: { type: 'string' },
+                     qty:         { type: 'number' },
+                     unit_price:  { type: 'number' }
+                   }}},
+      tax_rate:  { type: 'number', description: 'PDV % (npr. 20). Default 0.' },
+      due_days:  { type: 'number', description: 'Rok plaćanja u danima. Default 14.' },
+      notes:     { type: 'string' }
+    }, required: ['client_id','items'] }
+  },
+  {
+    name: 'create_care_invoice',
+    description: 'Automatski kreiraj Care Plan fakturu za klijenta (uzima plan i cijenu iz CRM-a).',
+    input_schema: { type: 'object', properties: {
+      client_id: { type: 'number' }
+    }, required: ['client_id'] }
+  },
+  {
+    name: 'list_invoices',
+    description: 'Lista faktura, opcionalno filtrirano po klijentu ili statusu.',
+    input_schema: { type: 'object', properties: {
+      client_id: { type: 'number' },
+      status:    { type: 'string', enum: ['draft','sent','paid','overdue'] }
+    }}
+  },
+  {
+    name: 'get_invoice',
+    description: 'Dohvati fakturu po ID-u ili broju (npr. DN-2026-001).',
+    input_schema: { type: 'object', properties: {
+      id:     { type: 'number' },
+      number: { type: 'string' }
+    }}
+  },
+  {
+    name: 'update_invoice_status',
+    description: 'Promijeni status fakture (draft → sent → paid / overdue).',
+    input_schema: { type: 'object', properties: {
+      id:     { type: 'number' },
+      status: { type: 'string', enum: ['draft','sent','paid','overdue'] }
+    }, required: ['id','status'] }
+  },
+  {
+    name: 'get_invoice_stats',
+    description: 'Finansijska statistika — ukupno fakturirano, plaćeno, outstanding.',
+    input_schema: { type: 'object', properties: {} }
+  },
+
   {
     name: 'setup_telegram_webhook',
     description: 'Registruj Telegram webhook na Iris serveru da možeš primati komande direktno iz Telegrama.',
@@ -1561,6 +1724,91 @@ async function handleAdminTool(name, input) {
       return getLeadStats();
     }
 
+    // ── Client CRM ──────────────────────────────────────────────────────────
+    case 'add_client': {
+      const client = addClient(input);
+      return { ok: true, client: formatClient(client) };
+    }
+    case 'list_clients': {
+      const clients = listClients({ status: input.status, plan: input.plan });
+      if (!clients.length) return { message: 'Nema klijenata.', count: 0 };
+      return { count: clients.length, clients: clients.map(c => formatClient(c, true)) };
+    }
+    case 'get_client': {
+      const c = input.domain ? getClientByDomain(input.domain) : getClientById(input.id);
+      if (!c) return { error: 'Klijent nije pronađen.' };
+      return c;
+    }
+    case 'update_client': {
+      const { id, ...data } = input;
+      return updateClient(id, data);
+    }
+    case 'get_client_stats': {
+      return getClientStats();
+    }
+    case 'add_client_note': {
+      return addClientNote(input.client_id, input.note, input.type || 'general');
+    }
+    case 'add_project': {
+      const { client_id, ...data } = input;
+      return addProject(client_id, data);
+    }
+
+    // ── Care Plan ────────────────────────────────────────────────────────────
+    case 'add_care_activity': {
+      const { client_id, ...data } = input;
+      return addActivity(client_id, data);
+    }
+    case 'mark_activity_done': {
+      return markActivityDone(input.id);
+    }
+    case 'get_care_summary': {
+      const client = getClientById(input.client_id);
+      if (!client) return { error: 'Klijent nije pronađen.' };
+      const summary = getMonthSummary(input.client_id, input.month);
+      return { formatted: formatCareSummary(client.name, summary), ...summary };
+    }
+    case 'list_care_clients': {
+      const clients = getCarePlanClients();
+      if (!clients.length) return { message: 'Nema klijenata sa Care Planom.' };
+      return { count: clients.length, clients: clients.map(c => ({
+        id: c.id, name: c.name, domain: c.domain, plan: c.plan, plan_price: c.plan_price,
+        summary: getMonthSummary(c.id, currentMonth())
+      }))};
+    }
+
+    // ── Invoices ─────────────────────────────────────────────────────────────
+    case 'create_invoice': {
+      const inv = createInvoice(input.client_id, input.items, {
+        tax_rate: input.tax_rate, due_days: input.due_days, notes: input.notes
+      });
+      return { ok: true, formatted: formatInvoice(inv), invoice: inv };
+    }
+    case 'create_care_invoice': {
+      const client = getClientById(input.client_id);
+      if (!client) return { error: 'Klijent nije pronađen.' };
+      if (!client.plan || client.plan === 'none') return { error: `${client.name} nema aktivan Care Plan.` };
+      const inv = createCarePlanInvoice(client);
+      return { ok: true, formatted: formatInvoice(inv), invoice: inv };
+    }
+    case 'list_invoices': {
+      const invs = listInvoices({ clientId: input.client_id, status: input.status });
+      if (!invs.length) return { message: 'Nema faktura.', count: 0 };
+      return { count: invs.length, invoices: invs.map(formatInvoice) };
+    }
+    case 'get_invoice': {
+      const inv = input.number ? getInvoiceByNumber(input.number) : getInvoiceById(input.id);
+      if (!inv) return { error: 'Faktura nije pronađena.' };
+      return { formatted: formatInvoice(inv), invoice: inv };
+    }
+    case 'update_invoice_status': {
+      const inv = updateInvoiceStatus(input.id, input.status);
+      return { ok: true, formatted: formatInvoice(inv) };
+    }
+    case 'get_invoice_stats': {
+      return getInvoiceStats();
+    }
+
     case 'setup_telegram_webhook': {
       const result = await setupWebhook(input.base_url);
       return result;
@@ -2145,6 +2393,12 @@ cron.schedule('*/30 * * * *', async () => {
   await checkAndAlert();
 }, { timezone: 'Europe/Vienna' });
 
+// ── Cron: Billing reminder (1. u mjesecu, 9:00) ──────────────────────────────
+cron.schedule('0 9 1 * *', async () => {
+  console.log('[CRON] Billing reminders...');
+  await sendBillingReminders();
+}, { timezone: 'Europe/Vienna' });
+
 // ── Cron: Weekly SEO Report (ponedjeljak 8:00) ───────────────────────────────
 cron.schedule('0 8 * * 1', async () => {
   if (!isSeoConfigured()) return;
@@ -2215,6 +2469,28 @@ registerCommand('leads', 'Lista novih upita sa digitalnature.at', async () => {
 registerCommand('health', 'Server CPU/RAM/disk + Docker containeri', async () => {
   const msg = await formatHealthReport();
   await sendTelegram(msg);
+});
+
+registerCommand('clients', 'Pregled klijenata i MRR', async () => {
+  const stats   = getClientStats();
+  const clients = listClients({ status: 'active' });
+  const lines   = [
+    `👥 <b>Klijenti</b>`,
+    `Aktivni: ${stats.active} | MRR: <b>€${stats.mrr.toFixed(2)}</b>`,
+    '',
+    ...clients.map(c => `• ${c.name}${c.domain ? ' — ' + c.domain : ''} (${c.plan || 'none'})`)
+  ];
+  await sendTelegram(lines.join('\n'));
+});
+
+registerCommand('invoices', 'Financijski pregled faktura', async () => {
+  const stats = getInvoiceStats();
+  await sendTelegram(
+    `💶 <b>Fakture</b>\n` +
+    `Plaćeno: <b>€${stats.total_revenue.toFixed(2)}</b>\n` +
+    `Outstanding: <b>€${stats.outstanding.toFixed(2)}</b>\n` +
+    `Drafts: ${stats.draft} | Sent: ${stats.sent} | Paid: ${stats.paid}`
+  );
 });
 
 registerCommand('help', 'Lista svih komandi', async () => {
