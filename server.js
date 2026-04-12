@@ -10,6 +10,9 @@ import { searchProducts, countProducts, listProducts, addProduct, updateProduct,
 import { sendTelegram, formatOosAlert, formatPriceAlert } from './notify.js';
 import { sendEmail, buildSupplierOrderEmail, buildOrderConfirmationEmail, buildShippingNotificationEmail, buildRefundReceivedEmail, buildRefundApprovedEmail } from './email.js';
 import { isConfigured as isSeoConfigured, SEO_SITES, getSeoReport, formatSeoReportTelegram, formatWeeklyReportAll, submitSitemap, checkIndexing, requestIndexing, getGA4Report, getSearchConsoleReport } from './seo.js';
+import { checkAllSites, getUptimeStats, formatUptimeReport, MONITOR_SITES_LIST } from './monitor.js';
+import { checkAllSSL, checkAllDomains, getSSLStatus, formatSSLReport } from './ssl.js';
+import { checkAndAlert, getHealthSummary, formatHealthReport, registerHealthEndpoint } from './health.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -823,6 +826,25 @@ const ADMIN_TOOLS = [
     input_schema: { type: 'object', properties: {} }
   },
 
+  // ── Monitoring ────────────────────────────────────────────────────────────
+  {
+    name: 'uptime_status',
+    description: 'Provjeri uptime status svih sajtova — koji su live, koji su dol, uptime % zadnjih 24h, prosječan response time.',
+    input_schema: { type: 'object', properties: {
+      domain: { type: 'string', description: 'Specifična domena, ili ostavi prazno za sve.' }
+    }}
+  },
+  {
+    name: 'ssl_status',
+    description: 'Provjeri SSL certifikate i expiry datume domena — koliko dana ostaje, issuer, da li treba obnavljati.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'server_health',
+    description: 'Provjeri zdravlje Hetzner VPS servera — CPU, RAM, disk usage, load average, Docker container statusi.',
+    input_schema: { type: 'object', properties: {} }
+  },
+
   // ── Supplier Sync ─────────────────────────────────────────────────────────
   {
     name: 'set_supplier_feed',
@@ -1473,6 +1495,28 @@ async function handleAdminTool(name, input) {
       return { configured: true, sites: SEO_SITES.map(s => ({ name: s.name, domain: s.domain })) };
     }
 
+    // ── Monitoring ──────────────────────────────────────────────────────────
+    case 'uptime_status': {
+      if (!MONITOR_SITES_LIST.length) return { error: 'MONITOR_SITES nije konfiguriran u .env' };
+      if (input.domain) {
+        const stats = getUptimeStats(input.domain, 24);
+        return stats;
+      }
+      const report = formatUptimeReport();
+      const allStats = MONITOR_SITES_LIST.map(d => getUptimeStats(d, 24));
+      return { report, stats: allStats };
+    }
+
+    case 'ssl_status': {
+      const { ssl, domains } = await getSSLStatus();
+      return { ssl, domains };
+    }
+
+    case 'server_health': {
+      const summary = await getHealthSummary();
+      return summary;
+    }
+
     // ── Supplier Sync ───────────────────────────────────────────────────────
     case 'set_supplier_feed': {
       const sup = getSupplierByName(input.supplier);
@@ -2011,6 +2055,25 @@ cron.schedule(SUMMARY_SCHEDULE, async () => {
   console.log('[CRON] Summary:', result.ok ? 'poslano' : result.reason);
 }, { timezone: 'Europe/Vienna' });
 
+// ── Cron: Uptime check (svakih 5 minuta) ─────────────────────────────────────
+if (MONITOR_SITES_LIST.length) {
+  cron.schedule('*/5 * * * *', async () => {
+    await checkAllSites();
+  }, { timezone: 'Europe/Vienna' });
+  console.log(`✓ Uptime monitor — ${MONITOR_SITES_LIST.length} sajtova`);
+}
+
+// ── Cron: SSL + Domain check (svaki dan 9:00) ─────────────────────────────────
+cron.schedule('0 9 * * *', async () => {
+  console.log('[CRON] SSL + domain expiry check...');
+  await Promise.all([checkAllSSL(), checkAllDomains()]);
+}, { timezone: 'Europe/Vienna' });
+
+// ── Cron: Server health check (svakih 30 minuta) ─────────────────────────────
+cron.schedule('*/30 * * * *', async () => {
+  await checkAndAlert();
+}, { timezone: 'Europe/Vienna' });
+
 // ── Cron: Weekly SEO Report (ponedjeljak 8:00) ───────────────────────────────
 cron.schedule('0 8 * * 1', async () => {
   if (!isSeoConfigured()) return;
@@ -2023,6 +2086,9 @@ cron.schedule('0 8 * * 1', async () => {
     console.error('[CRON] SEO report greška:', e.message);
   }
 }, { timezone: 'Europe/Vienna' });
+
+// ── Health endpoint ───────────────────────────────────────────────────────────
+registerHealthEndpoint(app);
 
 // ── Static files ──────────────────────────────────────────────────────────────
 app.use(express.static(join(__dirname, 'html')));
