@@ -133,6 +133,82 @@ export function getRevenueDashboard() {
   };
 }
 
+// ── Profit per Client (#9) ────────────────────────────────────────────────────
+
+export function getProfitPerClient() {
+  const db      = getDb();
+  const clients = listClients({ status: 'active', limit: 200 });
+
+  // Fakturirani iznos po klijentu (paid + sent fakture)
+  const invoiceRows = db.prepare(`
+    SELECT client_id, SUM(total) as billed
+    FROM invoices
+    WHERE status IN ('paid','sent') AND date(created_at) >= date('now','-12 months')
+    GROUP BY client_id
+  `).all().catch?.() ?? (() => {
+    try {
+      return db.prepare(`
+        SELECT client_id, SUM(total) as billed
+        FROM invoices
+        WHERE status IN ('paid','sent') AND date(created_at) >= date('now','-12 months')
+        GROUP BY client_id
+      `).all();
+    } catch { return []; }
+  })();
+
+  // Trošak vremena po klijentu (iz time_entries)
+  const timeRows = (() => {
+    try {
+      return db.prepare(`
+        SELECT client_id, SUM(hours) as hours
+        FROM time_entries
+        WHERE date(created_at) >= date('now','-12 months')
+        GROUP BY client_id
+      `).all();
+    } catch { return []; }
+  })();
+
+  const billedMap = Object.fromEntries((Array.isArray(invoiceRows) ? invoiceRows : []).map(r => [r.client_id, r.billed || 0]));
+  const hoursMap  = Object.fromEntries(timeRows.map(r => [r.client_id, r.hours || 0]));
+
+  const HOURLY_COST = parseFloat(process.env.HOURLY_COST || '25'); // €/h trošak
+
+  return clients.map(c => {
+    const revenue  = (billedMap[c.id] || 0) + (c.plan_price * 12); // fakture + godišnji plan
+    const hours    = hoursMap[c.id] || 0;
+    const cost     = hours * HOURLY_COST;
+    const profit   = revenue - cost;
+    const margin   = revenue > 0 ? Math.round(profit / revenue * 100) : null;
+    return {
+      id:      c.id,
+      name:    c.name,
+      plan:    c.plan,
+      revenue: Math.round(revenue),
+      hours:   Math.round(hours * 10) / 10,
+      cost:    Math.round(cost),
+      profit:  Math.round(profit),
+      margin,
+    };
+  }).sort((a, b) => b.profit - a.profit);
+}
+
+export function formatProfitReport() {
+  const rows = getProfitPerClient();
+  if (!rows.length) return '📊 Nema aktivnih klijenata.';
+
+  const total = rows.reduce((s, r) => ({ revenue: s.revenue + r.revenue, profit: s.profit + r.profit }), { revenue: 0, profit: 0 });
+  const lines = [`💼 <b>Profit po klijentu (12 mj)</b>\n`];
+
+  rows.forEach(r => {
+    const icon = r.margin === null ? '•' : r.margin >= 60 ? '🟢' : r.margin >= 30 ? '🟡' : '🔴';
+    lines.push(`${icon} <b>${r.name}</b> — profit €${r.profit} ${r.margin !== null ? `(${r.margin}%)` : ''}`);
+    lines.push(`   Prihod €${r.revenue} | Trošak €${r.cost} (${r.hours}h)`);
+  });
+
+  lines.push(`\n<b>Ukupno:</b> prihod €${total.revenue} | profit €${total.profit}`);
+  return lines.join('\n');
+}
+
 // ── Formatiranje ──────────────────────────────────────────────────────────────
 
 export function formatRevenueDashboard() {

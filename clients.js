@@ -165,6 +165,81 @@ export function addClientNote(clientId, note, type = 'general') {
   return db.prepare('SELECT * FROM client_notes WHERE id = ?').get(r.lastInsertRowid);
 }
 
+// ── Churn Predictor (#10) ─────────────────────────────────────────────────────
+
+export function getChurnRisks() {
+  const db = getDb();
+
+  const clients = db.prepare(`SELECT * FROM clients WHERE status = 'active'`).all();
+
+  // Zadnja faktura po klijentu
+  const lastInvoice = (() => {
+    try {
+      return db.prepare(`
+        SELECT client_id, MAX(date(created_at)) as last_date
+        FROM invoices GROUP BY client_id
+      `).all();
+    } catch { return []; }
+  })();
+  const lastInvMap = Object.fromEntries(lastInvoice.map(r => [r.client_id, r.last_date]));
+
+  // Zadnja nota po klijentu
+  const lastNote = db.prepare(`
+    SELECT client_id, MAX(date(created_at)) as last_date
+    FROM client_notes GROUP BY client_id
+  `).all();
+  const lastNoteMap = Object.fromEntries(lastNote.map(r => [r.client_id, r.last_date]));
+
+  const now = new Date();
+
+  return clients.map(c => {
+    const risks = [];
+    let score = 0;
+
+    // Nema fakture 60+ dana
+    const lastInv = lastInvMap[c.id];
+    if (!lastInv) {
+      risks.push('Nikad nije fakturiran');
+      score += 3;
+    } else {
+      const daysSinceInv = Math.floor((now - new Date(lastInv)) / 86400000);
+      if (daysSinceInv > 90) { risks.push(`Nema fakture ${daysSinceInv}d`); score += 3; }
+      else if (daysSinceInv > 60) { risks.push(`Nema fakture ${daysSinceInv}d`); score += 2; }
+    }
+
+    // Nema kontakta (nota) 30+ dana
+    const lastN = lastNoteMap[c.id];
+    if (!lastN) {
+      risks.push('Nema zabilježenog kontakta');
+      score += 2;
+    } else {
+      const daysSinceNote = Math.floor((now - new Date(lastN)) / 86400000);
+      if (daysSinceNote > 60) { risks.push(`Bez kontakta ${daysSinceNote}d`); score += 2; }
+      else if (daysSinceNote > 30) { risks.push(`Bez kontakta ${daysSinceNote}d`); score += 1; }
+    }
+
+    // Plan "none" ili plan_price = 0
+    if (c.plan === 'none' || c.plan_price === 0) { risks.push('Bez Care plana'); score += 1; }
+
+    return { ...c, churnScore: score, churnRisks: risks };
+  })
+    .filter(c => c.churnScore > 0)
+    .sort((a, b) => b.churnScore - a.churnScore);
+}
+
+export function formatChurnRisks() {
+  const risks = getChurnRisks();
+  if (!risks.length) return '✅ Nema klijenata s churn rizikom.';
+
+  const lines = [`⚠️ <b>Churn Predictor — rizični klijenti</b>\n`];
+  risks.forEach(c => {
+    const icon = c.churnScore >= 5 ? '🔴' : c.churnScore >= 3 ? '🟠' : '🟡';
+    lines.push(`${icon} <b>${c.name}</b> (score: ${c.churnScore})`);
+    c.churnRisks.forEach(r => lines.push(`   • ${r}`));
+  });
+  return lines.join('\n');
+}
+
 // ── Formatiranje ──────────────────────────────────────────────────────────────
 
 const statusEmoji = { active: '🟢', paused: '🟡', churned: '🔴', prospect: '🔵' };

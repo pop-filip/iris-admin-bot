@@ -117,6 +117,47 @@ export async function notifyNewLead(lead) {
   return sendTelegram(lines.join('\n'));
 }
 
+// ── Lead Follow-up (#11) ──────────────────────────────────────────────────────
+
+const FOLLOWUP_COOLDOWN = new Map();
+const FOLLOWUP_COOLDOWN_H = 24 * 60 * 60 * 1000; // 24h
+
+export function getStaleLeads(days = 5) {
+  const db = getDb();
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  return db.prepare(`
+    SELECT * FROM leads
+    WHERE status IN ('new','contacted')
+      AND datetime(updated_at) <= ?
+    ORDER BY updated_at ASC
+  `).all(cutoff);
+}
+
+export async function sendFollowUpReminders(days = 5) {
+  const stale = getStaleLeads(days);
+  if (!stale.length) return { sent: 0, stale: [] };
+
+  const sent = [];
+  for (const lead of stale) {
+    const key = `followup:${lead.id}`;
+    const last = FOLLOWUP_COOLDOWN.get(key) || 0;
+    if (Date.now() - last < FOLLOWUP_COOLDOWN_H) continue;
+    FOLLOWUP_COOLDOWN.set(key, Date.now());
+
+    const daysSince = Math.floor((Date.now() - new Date(lead.updated_at)) / 86400000);
+    const msg =
+      `⏰ <b>Follow-up podsjetnik — Lead #${lead.id}</b>\n` +
+      `👤 ${lead.name || 'N/A'} | ${lead.email}\n` +
+      `Status: <b>${lead.status}</b> | Bez promjene: <b>${daysSince} dana</b>\n` +
+      (lead.service ? `Usluga: ${lead.service}\n` : '') +
+      `➡️ Kontaktiraj ili arhiviraj (status: lost)`;
+    await sendTelegram(msg);
+    sent.push(lead.id);
+  }
+
+  return { sent: sent.length, stale: stale.map(l => l.id) };
+}
+
 // ── Format za chat ────────────────────────────────────────────────────────────
 
 export function formatLead(lead) {

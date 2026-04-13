@@ -13,8 +13,8 @@ import { isConfigured as isSeoConfigured, SEO_SITES, getSeoReport, formatSeoRepo
 import { checkAllSites, getUptimeStats, formatUptimeReport, MONITOR_SITES_LIST } from './monitor.js';
 import { checkAllSSL, checkAllDomains, getSSLStatus, formatSSLReport } from './ssl.js';
 import { checkAndAlert, getHealthSummary, formatHealthReport, registerHealthEndpoint } from './health.js';
-import { addLead, listLeads, getLeadById, updateLeadStatus, getLeadStats, notifyNewLead, formatLead } from './leads.js';
-import { addClient, getClientById, getClientByDomain, listClients, updateClient, getClientStats, addProject, updateProject, addClientNote, formatClient } from './clients.js';
+import { addLead, listLeads, getLeadById, updateLeadStatus, getLeadStats, notifyNewLead, formatLead, getStaleLeads, sendFollowUpReminders } from './leads.js';
+import { addClient, getClientById, getClientByDomain, listClients, updateClient, getClientStats, addProject, updateProject, addClientNote, formatClient, getChurnRisks, formatChurnRisks } from './clients.js';
 import { addActivity, markActivityDone, listActivities, getMonthSummary, getCarePlanClients, sendBillingReminders, formatCareSummary, currentMonth } from './careplan.js';
 import { createInvoice, getInvoiceById, getInvoiceByNumber, listInvoices, updateInvoiceStatus, getInvoiceStats, createCarePlanInvoice, formatInvoice } from './invoice.js';
 import { logDeploy, listDeploys, getLastDeploy, getDeployStats, notifyDeploy, formatDeployList } from './deploylog.js';
@@ -24,7 +24,10 @@ import { sendWeeklyDigest, buildWeeklyDigest } from './digest.js';
 import { listSites, readSiteFile, writeSiteFile, listSiteFiles, auditSeoPage, auditSeoSite, addJsonLdSchema, addOrUpdateMetaTags, updateSitemap, gitCommitAndDeploy, formatSeoAudit } from './webops.js';
 import { logTime, listTimeEntries, getMonthSummary as getTimeSummary, getUnbilledSummary, markAsBilled, getTimeStats, formatUnbilledSummary, formatMonthSummary as formatTimeSummary } from './timetrack.js';
 import { checkAllSites as checkAllPageSpeed, getAllLatestScores, getScoreHistory, formatPerfReport } from './pagespeed.js';
-import { getRevenueDashboard, formatRevenueDashboard, saveMrrSnapshot, getMrrHistory, getPipelineValue } from './revenue.js';
+import { getRevenueDashboard, formatRevenueDashboard, saveMrrSnapshot, getMrrHistory, getPipelineValue, getProfitPerClient, formatProfitReport } from './revenue.js';
+import { checkSite as precheckSite, formatCheckReport } from './precheck.js';
+import { scanSite, scanAllSites, formatScanReport } from './linkscanner.js';
+import { checkAllForms, testSingleForm, formatFormReport } from './formmonitor.js';
 import { listContainers, getContainerLogs, restartContainer, stopContainer, startContainer, getContainerStats, formatContainerList, formatLogs } from './docker.js';
 import { analyzeContainerLogs, checkAllContainers, getRecentErrors, formatLogReport, formatFullLogReport } from './loganalyzer.js';
 import { checkPaymentReminders, sendManualReminder, formatPaymentReminderReport } from './payment.js';
@@ -1641,6 +1644,70 @@ const ADMIN_TOOLS = [
     name: 'weekly_digest',
     description: 'Generiši i pošalji tjedni digest na Telegram — leads, MRR, deployi, uptime summary.',
     input_schema: { type: 'object', properties: {} }
+  },
+
+  // ── Pre-Deploy Checker (#6) ────────────────────────────────────────────────
+  {
+    name: 'precheck_site',
+    description: 'Pre-deploy provjera sajta — broken links, meta tagovi, h1, alt atributi, sitemap. Pokreni PRIJE svakog deploya.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain:  { type: 'string', description: 'Domena sajta, npr. digitalnature.at' },
+        webroot: { type: 'string', description: 'Putanja do HTML fajlova (opcionalno, uzima iz WEBOPS_SITES)' }
+      },
+      required: ['domain']
+    }
+  },
+
+  // ── Broken Link Scanner (#7) ───────────────────────────────────────────────
+  {
+    name: 'scan_links',
+    description: 'Skenira sve interne linkove i resurse na sajtu — pronađi 404 i timeout linkove.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta — ostaviti prazno za sve sajtove iz WEBOPS_SITES' }
+      }
+    }
+  },
+
+  // ── Form Monitor (#8) ─────────────────────────────────────────────────────
+  {
+    name: 'check_forms',
+    description: 'Testira contact forme — šalje test POST i provjerava status kod. Alerts ako forma ne radi.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Ime specifičnog form endpointa — ostaviti prazno za sve' }
+      }
+    }
+  },
+
+  // ── Profit per Client (#9) ────────────────────────────────────────────────
+  {
+    name: 'profit_report',
+    description: 'Prikaz profita po klijentu — prihod, trošak (sati × cijena), marža. Pomaže vidjeti koji klijenti su najisplativiji.',
+    input_schema: { type: 'object', properties: {} }
+  },
+
+  // ── Churn Predictor (#10) ─────────────────────────────────────────────────
+  {
+    name: 'churn_risks',
+    description: 'Churn predictor — lista aktivnih klijenata s rizicima odlaska (nema fakture, nema kontakta, bez plana).',
+    input_schema: { type: 'object', properties: {} }
+  },
+
+  // ── Lead Follow-up (#11) ──────────────────────────────────────────────────
+  {
+    name: 'lead_followup',
+    description: 'Provjeri stale leadove bez aktivnosti — pošalji podsjetnik na Telegram. Leadi status "new" ili "contacted" bez promjene N dana.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        days: { type: 'number', description: 'Koliko dana neaktivnosti = stale (default: 5)' }
+      }
+    }
   }
 ];
 
@@ -2658,6 +2725,54 @@ async function handleAdminTool(name, input) {
       return { ok: true, message: 'Digest poslan na Telegram.' };
     }
 
+    // ── Pre-Deploy Checker (#6) ───────────────────────────────────────────────
+    case 'precheck_site': {
+      const sites = (() => { try { return JSON.parse(process.env.WEBOPS_SITES || '[]'); } catch { return []; } })();
+      const site  = sites.find(s => s.domain === input.domain);
+      const webroot = input.webroot || site?.webroot;
+      if (!webroot) return { error: `WEBOPS_SITES konfiguracija nije pronađena za ${input.domain}` };
+      const report = await precheckSite(input.domain, webroot);
+      return { ...report, report: formatCheckReport(report) };
+    }
+
+    // ── Broken Link Scanner (#7) ──────────────────────────────────────────────
+    case 'scan_links': {
+      if (input.domain) {
+        const sites = (() => { try { return JSON.parse(process.env.WEBOPS_SITES || '[]'); } catch { return []; } })();
+        const site  = sites.find(s => s.domain === input.domain);
+        if (!site) return { error: `WEBOPS_SITES konfiguracija nije pronađena za ${input.domain}` };
+        const result = await scanSite(site.domain, site.webroot);
+        return { ...result, report: formatScanReport(result) };
+      }
+      const results = await scanAllSites();
+      return results;
+    }
+
+    // ── Form Monitor (#8) ─────────────────────────────────────────────────────
+    case 'check_forms': {
+      if (input.name) {
+        const result = await testSingleForm(input.name);
+        return { ...result, report: formatFormReport([result]) };
+      }
+      const results = await checkAllForms();
+      return { results, report: formatFormReport(results) };
+    }
+
+    // ── Profit per Client (#9) ────────────────────────────────────────────────
+    case 'profit_report':
+      return { rows: getProfitPerClient(), report: formatProfitReport() };
+
+    // ── Churn Predictor (#10) ─────────────────────────────────────────────────
+    case 'churn_risks':
+      return { risks: getChurnRisks(), report: formatChurnRisks() };
+
+    // ── Lead Follow-up (#11) ──────────────────────────────────────────────────
+    case 'lead_followup': {
+      const result = await sendFollowUpReminders(input.days || 5);
+      const stale  = getStaleLeads(input.days || 5);
+      return { ...result, leads: stale.map(l => ({ id: l.id, name: l.name, email: l.email, status: l.status, updated_at: l.updated_at })) };
+    }
+
     default: return { error: 'Nepoznat tool.' };
   }
 }
@@ -3219,6 +3334,31 @@ cron.schedule('0 9 * * 2', async () => {
   catch (e) { console.error('[CRON] PageSpeed greška:', e.message); }
 }, { timezone: 'Europe/Vienna' });
 
+// ── Cron: Form Monitor (svaki dan 10:00) ─────────────────────────────────────
+cron.schedule('0 10 * * *', async () => {
+  console.log('[CRON] Form monitor check...');
+  try {
+    const results = await checkAllForms();
+    if (!results.error) console.log(`[CRON] Forme provjerene: ${results.length}`);
+  } catch (e) { console.error('[CRON] Form monitor greška:', e.message); }
+}, { timezone: 'Europe/Vienna' });
+
+// ── Cron: Broken Link Scanner (nedjelja 9:00) ─────────────────────────────────
+cron.schedule('0 9 * * 0', async () => {
+  console.log('[CRON] Broken link scan...');
+  try { await scanAllSites(); }
+  catch (e) { console.error('[CRON] Link scanner greška:', e.message); }
+}, { timezone: 'Europe/Vienna' });
+
+// ── Cron: Lead Follow-up podsjetnici (svaki dan 9:00) ─────────────────────────
+cron.schedule('0 9 * * *', async () => {
+  console.log('[CRON] Lead follow-up check...');
+  try {
+    const r = await sendFollowUpReminders(5);
+    if (r.sent > 0) console.log(`[CRON] Follow-up poslan za ${r.sent} leada`);
+  } catch (e) { console.error('[CRON] Lead follow-up greška:', e.message); }
+}, { timezone: 'Europe/Vienna' });
+
 // ── Cron: Weekly SEO Report (ponedjeljak 8:00) ───────────────────────────────
 cron.schedule('0 8 * * 1', async () => {
   if (!isSeoConfigured()) return;
@@ -3374,6 +3514,28 @@ registerCommand('payments', 'Provjeri i pošalji payment reminders', async () =>
 
 registerCommand('digest', 'Tjedni digest — sve informacije na jednom mjestu', async () => {
   await sendWeeklyDigest();
+});
+
+registerCommand('forms', 'Provjeri status svih contact formi', async () => {
+  const results = await checkAllForms();
+  await sendTelegram(formatFormReport(results));
+});
+
+registerCommand('links', 'Skeniranje broken linkova na svim sajtovima', async () => {
+  await scanAllSites();
+});
+
+registerCommand('profit', 'Profit po klijentu — prihod, trošak, marža', async () => {
+  await sendTelegram(formatProfitReport());
+});
+
+registerCommand('churn', 'Churn predictor — klijenti s rizikom odlaska', async () => {
+  await sendTelegram(formatChurnRisks());
+});
+
+registerCommand('followup', 'Stale leadi bez aktivnosti — šalje Telegram podsjetnike', async () => {
+  const r = await sendFollowUpReminders(5);
+  await sendTelegram(r.sent > 0 ? `✅ Follow-up poslan za ${r.sent} lead(a).` : '✅ Nema stale leadova.');
 });
 
 registerCommand('help', 'Lista svih komandi', async () => {

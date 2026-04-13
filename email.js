@@ -534,3 +534,54 @@ export function buildMonthlyReportEmail({ client, month, uptime, deploys, careAc
     to: clientEmail,
   };
 }
+
+// ── Lead Follow-up Email (#11) ────────────────────────────────────────────────
+
+export function buildLeadFollowUpEmail(lead) {
+  const agencyName  = process.env.AGENCY_NAME   || 'Digital Nature';
+  const agencyEmail = process.env.SMTP_FROM      || process.env.SMTP_USER || '';
+  const agencyUrl   = process.env.AGENCY_URL     || 'https://digitalnature.at';
+
+  const subject = `Ihre Anfrage bei ${agencyName} — kurze Rückfrage`;
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;color:#1a1a2e;max-width:580px;margin:0 auto;padding:20px;">
+  <div style="border-top:4px solid #f0a500;padding:24px;background:#fff;">
+    <h2 style="font-size:18px;color:#1a1a2e;margin:0 0 16px;">Ihre Anfrage bei ${agencyName}</h2>
+
+    <p style="font-size:14px;line-height:1.6;">
+      Sehr geehrte/r ${lead.name ? `<b>${lead.name}</b>` : 'Interessent/in'},
+    </p>
+
+    <p style="font-size:14px;line-height:1.6;">
+      vor Kurzem haben Sie uns eine Anfrage geschickt${lead.service ? ` bezüglich <b>${lead.service}</b>` : ''}.
+      Wir möchten sicherstellen, dass Ihre Anfrage die nötige Aufmerksamkeit bekommt.
+    </p>
+
+    <p style="font-size:14px;line-height:1.6;">
+      Dürfen wir fragen, ob Sie noch Interesse haben oder ob wir Ihnen mit weiteren Informationen helfen können?
+    </p>
+
+    <div style="text-align:center;margin:28px 0;">
+      <a href="mailto:${agencyEmail}?subject=Re: Anfrage"
+         style="background:#f0a500;color:#fff;padding:12px 28px;text-decoration:none;border-radius:6px;font-weight:bold;font-size:14px;">
+        Ja, ich bin interessiert
+      </a>
+    </div>
+
+    <p style="font-size:13px;color:#666;line-height:1.5;">
+      Falls Sie kein Interesse mehr haben, können Sie diese E-Mail einfach ignorieren.<br>
+      Wir freuen uns auf Ihre Rückmeldung.
+    </p>
+
+    <p style="font-size:14px;">Mit freundlichen Grüßen,<br><b>${agencyName}</b><br>
+    <a href="${agencyUrl}" style="color:#f0a500;">${agencyUrl}</a></p>
+  </div>
+  <p style="text-align:center;font-size:11px;color:#bbb;margin-top:12px;">
+    ${agencyName} — ${new Date().toLocaleDateString('de-AT')}
+  </p>
+</body></html>`;
+
+  return { subject, html, to: lead.email };
+}
