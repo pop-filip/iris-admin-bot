@@ -58,7 +58,9 @@ export function readSiteFile(domain, filePath) {
     const full = safePath(site.webroot, filePath);
     if (!existsSync(full)) return { error: `Fajl ne postoji: ${filePath}` };
     const content = readFileSync(full, 'utf8');
-    return { ok: true, content, path: filePath, size: content.length };
+    const MAX = 12000;
+    const truncated = content.length > MAX;
+    return { ok: true, content: truncated ? content.slice(0, MAX) + '\n<!-- [truncated] -->' : content, path: filePath, size: content.length, truncated };
   } catch (e) {
     return { error: e.message };
   }
