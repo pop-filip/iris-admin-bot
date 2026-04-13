@@ -3374,6 +3374,7 @@ cron.schedule('0 8 * * 1', async () => {
 
 // ── Telegram AI Chat Handler ──────────────────────────────────────────────────
 registerAiChatHandler(async (message, history) => {
+  console.log('[TG AI] Poruka primljena:', message.slice(0, 60));
   const messages = [
     ...history.slice(-16).filter(m => m.role && m.content),
     { role: 'user', content: message }
