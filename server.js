@@ -32,7 +32,7 @@ import { listContainers, getContainerLogs, restartContainer, stopContainer, star
 import { analyzeContainerLogs, checkAllContainers, getRecentErrors, formatLogReport, formatFullLogReport } from './loganalyzer.js';
 import { checkPaymentReminders, sendManualReminder, formatPaymentReminderReport } from './payment.js';
 import { sendMonthlyReport, sendAllMonthlyReports, generateClientReport, formatReportPreview } from './monthlyreport.js';
-import { registerTelegramWebhook, registerCommand, setupWebhook, getHelp, registerAiChatHandler } from './telegram-commands.js';
+import { registerTelegramWebhook, registerCommand, setupWebhook, getHelp } from './telegram-commands.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -3396,43 +3396,6 @@ cron.schedule('0 8 * * 1', async () => {
   }
 }, { timezone: 'Europe/Vienna' });
 
-// ── Telegram AI Chat Handler ──────────────────────────────────────────────────
-registerAiChatHandler(async (message, history) => {
-  console.log('[TG AI] Poruka primljena:', message.slice(0, 60));
-  const messages = [
-    ...history.slice(-16).filter(m => m.role && m.content),
-    { role: 'user', content: message }
-  ];
-
-  let response = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 4096,
-    system: ADMIN_SYSTEM,
-    tools: ADMIN_TOOLS,
-    messages
-  });
-
-  while (response.stop_reason === 'tool_use') {
-    const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
-    const toolResults = await Promise.all(
-      toolUseBlocks.map(async tb => {
-        const result = await handleAdminTool(tb.name, tb.input);
-        return { type: 'tool_result', tool_use_id: tb.id, content: JSON.stringify(result) };
-      })
-    );
-    messages.push({ role: 'assistant', content: response.content });
-    messages.push({ role: 'user', content: toolResults });
-    response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 4096,
-      system: ADMIN_SYSTEM,
-      tools: ADMIN_TOOLS,
-      messages
-    });
-  }
-
-  return response.content.find(b => b.type === 'text')?.text ?? '(nema odgovora)';
-});
 
 // ── Health endpoint ───────────────────────────────────────────────────────────
 registerHealthEndpoint(app);
@@ -3515,48 +3478,6 @@ registerCommand('invoices', 'Financijski pregled faktura', async () => {
   );
 });
 
-registerCommand('deploys', 'Zadnjih 10 deploya', async () => {
-  const stats   = getDeployStats();
-  const deploys = listDeploys({ limit: 10 });
-  const lines   = [
-    `🚀 <b>Deploy Log</b>`,
-    `Danas: ${stats.today} | Tjedan: ${stats.week} | Ukupno: ${stats.total}`,
-    '',
-    formatDeployList(deploys),
-  ];
-  await sendTelegram(lines.join('\n'));
-});
-
-registerCommand('backups', 'Status svih backupa', async () => {
-  const msg = await formatBackupReport();
-  await sendTelegram(msg);
-});
-
-registerCommand('keywords', 'Keyword pozicije za sve sajtove', async () => {
-  const { KEYWORD_CONFIG } = await import('./competitor.js').catch(() => ({ KEYWORD_CONFIG: [] }));
-  const domains = (process.env.COMPETITOR_KEYWORDS ? JSON.parse(process.env.COMPETITOR_KEYWORDS) : []).map(c => c.domain);
-  if (!domains.length) return sendTelegram('⚠️ COMPETITOR_KEYWORDS nije konfiguriran.');
-  for (const domain of domains) {
-    const msg = await formatKeywordReport(domain);
-    await sendTelegram(msg);
-  }
-});
-
-registerCommand('revenue', 'Revenue dashboard — MRR, pipeline, fakture', async () => {
-  const msg = formatRevenueDashboard();
-  await sendTelegram(msg);
-});
-
-registerCommand('time', 'Nefakturirani sati i statistika', async () => {
-  const msg = formatUnbilledSummary();
-  const stats = getTimeStats();
-  await sendTelegram(`${msg}\n\n⏱ Ovaj mj: ${stats.thisMonth}h | Ukupno: ${stats.total}h`);
-});
-
-registerCommand('perf', 'Performance scorovi za sve sajtove', async () => {
-  const msg = await formatPerfReport();
-  await sendTelegram(msg);
-});
 
 registerCommand('ps', 'Lista Docker containera', async () => {
   await sendTelegram(formatContainerList());
@@ -3574,26 +3495,6 @@ registerCommand('payments', 'Provjeri i pošalji payment reminders', async () =>
   await sendTelegram(formatPaymentReminderReport(results));
 });
 
-registerCommand('digest', 'Tjedni digest — sve informacije na jednom mjestu', async () => {
-  await sendWeeklyDigest();
-});
-
-registerCommand('forms', 'Provjeri status svih contact formi', async () => {
-  const results = await checkAllForms();
-  await sendTelegram(formatFormReport(results));
-});
-
-registerCommand('links', 'Skeniranje broken linkova na svim sajtovima', async () => {
-  await scanAllSites();
-});
-
-registerCommand('profit', 'Profit po klijentu — prihod, trošak, marža', async () => {
-  await sendTelegram(formatProfitReport());
-});
-
-registerCommand('churn', 'Churn predictor — klijenti s rizikom odlaska', async () => {
-  await sendTelegram(formatChurnRisks());
-});
 
 registerCommand('followup', 'Stale leadi bez aktivnosti — šalje Telegram podsjetnike', async () => {
   const r = await sendFollowUpReminders(5);
