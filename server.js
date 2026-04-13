@@ -25,6 +25,10 @@ import { listSites, readSiteFile, writeSiteFile, listSiteFiles, auditSeoPage, au
 import { logTime, listTimeEntries, getMonthSummary as getTimeSummary, getUnbilledSummary, markAsBilled, getTimeStats, formatUnbilledSummary, formatMonthSummary as formatTimeSummary } from './timetrack.js';
 import { checkAllSites as checkAllPageSpeed, getAllLatestScores, getScoreHistory, formatPerfReport } from './pagespeed.js';
 import { getRevenueDashboard, formatRevenueDashboard, saveMrrSnapshot, getMrrHistory, getPipelineValue } from './revenue.js';
+import { listContainers, getContainerLogs, restartContainer, stopContainer, startContainer, getContainerStats, formatContainerList, formatLogs } from './docker.js';
+import { analyzeContainerLogs, checkAllContainers, getRecentErrors, formatLogReport, formatFullLogReport } from './loganalyzer.js';
+import { checkPaymentReminders, sendManualReminder, formatPaymentReminderReport } from './payment.js';
+import { sendMonthlyReport, sendAllMonthlyReports, generateClientReport, formatReportPreview } from './monthlyreport.js';
 import { registerTelegramWebhook, registerCommand, setupWebhook, getHelp } from './telegram-commands.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1491,6 +1495,147 @@ const ADMIN_TOOLS = [
     }
   },
 
+  // ── Docker Manager ────────────────────────────────────────────────────────
+  {
+    name: 'docker_ps',
+    description: 'Lista svih Docker containera — status, image, portovi.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'docker_logs',
+    description: 'Prikaži logove Docker containera.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        container: { type: 'string', description: 'Naziv containera' },
+        lines:     { type: 'number', description: 'Broj linija (default: 50)' }
+      },
+      required: ['container']
+    }
+  },
+  {
+    name: 'docker_restart',
+    description: 'Restartuj Docker container.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        container: { type: 'string', description: 'Naziv containera' }
+      },
+      required: ['container']
+    }
+  },
+  {
+    name: 'docker_stop',
+    description: 'Zaustavi Docker container.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        container: { type: 'string', description: 'Naziv containera' }
+      },
+      required: ['container']
+    }
+  },
+  {
+    name: 'docker_start',
+    description: 'Pokreni Docker container.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        container: { type: 'string', description: 'Naziv containera' }
+      },
+      required: ['container']
+    }
+  },
+  {
+    name: 'docker_stats',
+    description: 'CPU i RAM usage jednog Docker containera.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        container: { type: 'string', description: 'Naziv containera' }
+      },
+      required: ['container']
+    }
+  },
+
+  // ── Log Analyzer ──────────────────────────────────────────────────────────
+  {
+    name: 'analyze_logs',
+    description: 'Analiziraj Docker logove za greške, 5xx errore, spore odgovore i auth failures.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        container: { type: 'string', description: 'Naziv containera (opcionalno — bez = svi)' },
+        minutes:   { type: 'number', description: 'Zadnjih N minuta (default: 15)' }
+      }
+    }
+  },
+  {
+    name: 'recent_errors',
+    description: 'Prikaži zadnje ERROR linije iz logova containera.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        container: { type: 'string', description: 'Naziv containera' },
+        lines:     { type: 'number', description: 'Koliko linija pretražiti (default: 100)' }
+      },
+      required: ['container']
+    }
+  },
+
+  // ── Payment Reminders ─────────────────────────────────────────────────────
+  {
+    name: 'check_payments',
+    description: 'Provjeri neplaćene fakture i pošalji payment reminders klijentima.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'send_payment_reminder',
+    description: 'Ručno pošalji payment reminder za određenu fakturu.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        invoice_id: { type: 'number', description: 'ID fakture' }
+      },
+      required: ['invoice_id']
+    }
+  },
+
+  // ── Monthly Report ────────────────────────────────────────────────────────
+  {
+    name: 'send_monthly_report',
+    description: 'Pošalji monthly report klijentu emailom — uptime, deployi, care plan aktivnosti, performance.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'number', description: 'ID klijenta' },
+        month:     { type: 'string', description: 'Mjesec YYYY-MM (default: prošli mjesec)' }
+      },
+      required: ['client_id']
+    }
+  },
+  {
+    name: 'send_all_monthly_reports',
+    description: 'Pošalji monthly report svim aktivnim care plan klijentima.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        month: { type: 'string', description: 'Mjesec YYYY-MM (default: prošli mjesec)' }
+      }
+    }
+  },
+  {
+    name: 'preview_monthly_report',
+    description: 'Preview monthly reporta za klijenta — provjeri podatke prije slanja.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'number', description: 'ID klijenta' }
+      },
+      required: ['client_id']
+    }
+  },
+
   // ── Weekly Digest ─────────────────────────────────────────────────────────
   {
     name: 'weekly_digest',
@@ -2451,6 +2596,61 @@ async function handleAdminTool(name, input) {
       return result;
     }
 
+    // ── Docker Manager ───────────────────────────────────────────────────────
+    case 'docker_ps':
+      return { report: formatContainerList(), containers: listContainers() };
+
+    case 'docker_logs': {
+      const result = getContainerLogs(input.container, input.lines || 50);
+      return { ...result, report: formatLogs(result) };
+    }
+
+    case 'docker_restart':
+      return restartContainer(input.container);
+
+    case 'docker_stop':
+      return stopContainer(input.container);
+
+    case 'docker_start':
+      return startContainer(input.container);
+
+    case 'docker_stats':
+      return getContainerStats(input.container);
+
+    // ── Log Analyzer ─────────────────────────────────────────────────────────
+    case 'analyze_logs': {
+      if (input.container) {
+        const result = analyzeContainerLogs(input.container, input.minutes || 15);
+        return { ...result, report: formatLogReport(result) };
+      }
+      const result = await checkAllContainers();
+      return { ...result, report: await formatFullLogReport() };
+    }
+
+    case 'recent_errors':
+      return getRecentErrors(input.container, input.lines || 100);
+
+    // ── Payment Reminders ─────────────────────────────────────────────────────
+    case 'check_payments': {
+      const results = await checkPaymentReminders();
+      return { ...results, report: formatPaymentReminderReport(results) };
+    }
+
+    case 'send_payment_reminder':
+      return await sendManualReminder(input.invoice_id);
+
+    // ── Monthly Report ────────────────────────────────────────────────────────
+    case 'send_monthly_report':
+      return await sendMonthlyReport(input.client_id, input.month);
+
+    case 'send_all_monthly_reports':
+      return await sendAllMonthlyReports(input.month);
+
+    case 'preview_monthly_report': {
+      const report = await generateClientReport(input.client_id);
+      return { ...report, report: formatReportPreview(report) };
+    }
+
     // ── Weekly Digest ────────────────────────────────────────────────────────
     case 'weekly_digest': {
       const msg = await buildWeeklyDigest();
@@ -2977,6 +3177,32 @@ cron.schedule('0 9 * * 3', async () => {
   }
 }, { timezone: 'Europe/Vienna' });
 
+// ── Cron: Payment Reminders (svaki dan 9:30) ─────────────────────────────────
+cron.schedule('30 9 * * *', async () => {
+  console.log('[CRON] Payment reminders check...');
+  try {
+    const results = await checkPaymentReminders();
+    if (results.sent?.length) console.log(`[CRON] Poslano ${results.sent.length} payment reminder(a)`);
+  } catch (e) { console.error('[CRON] Payment reminders greška:', e.message); }
+}, { timezone: 'Europe/Vienna' });
+
+// ── Cron: Monthly Reports (1. u mjesecu 10:00) ────────────────────────────────
+cron.schedule('0 10 1 * *', async () => {
+  console.log('[CRON] Monthly reports...');
+  try {
+    const prevMonth = new Date();
+    prevMonth.setMonth(prevMonth.getMonth() - 1);
+    const month = prevMonth.toISOString().slice(0, 7);
+    await sendAllMonthlyReports(month);
+  } catch (e) { console.error('[CRON] Monthly reports greška:', e.message); }
+}, { timezone: 'Europe/Vienna' });
+
+// ── Cron: Log Analyzer (svakih 15 min) ───────────────────────────────────────
+cron.schedule('*/15 * * * *', async () => {
+  try { await checkAllContainers(); }
+  catch (e) { console.error('[CRON] Log analyzer greška:', e.message); }
+});
+
 // ── Cron: Weekly Digest (ponedjeljak 7:00) ───────────────────────────────────
 cron.schedule('0 7 * * 1', async () => {
   console.log('[CRON] Weekly digest...');
@@ -3128,6 +3354,22 @@ registerCommand('time', 'Nefakturirani sati i statistika', async () => {
 registerCommand('perf', 'Performance scorovi za sve sajtove', async () => {
   const msg = await formatPerfReport();
   await sendTelegram(msg);
+});
+
+registerCommand('ps', 'Lista Docker containera', async () => {
+  await sendTelegram(formatContainerList());
+});
+
+registerCommand('logs', 'Logovi Docker containera — /logs [container]', async (args) => {
+  const container = args?.trim();
+  if (!container) return sendTelegram('Korištenje: /logs [naziv-containera]');
+  const result = getContainerLogs(container, 30);
+  await sendTelegram(formatLogs(result, 20));
+});
+
+registerCommand('payments', 'Provjeri i pošalji payment reminders', async () => {
+  const results = await checkPaymentReminders();
+  await sendTelegram(formatPaymentReminderReport(results));
 });
 
 registerCommand('digest', 'Tjedni digest — sve informacije na jednom mjestu', async () => {

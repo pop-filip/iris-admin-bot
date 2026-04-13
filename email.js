@@ -345,3 +345,192 @@ export function buildRefundApprovedEmail(refund) {
 
   return { subject, html };
 }
+
+// ── Payment Reminder Email ────────────────────────────────────────────────────
+
+export function buildPaymentReminderEmail(invoice, daysPastDue) {
+  const clientName = invoice.client?.name || 'Klijent';
+  const clientEmail = invoice.client?.email || '';
+  const agencyName = 'Digital Nature';
+  const agencyEmail = process.env.SMTP_FROM || process.env.SMTP_USER || '';
+
+  const urgency = daysPastDue >= 14 ? 'final' : daysPastDue >= 7 ? 'second' : 'first';
+  const subjects = {
+    first:  `Zahlungserinnerung — Rechnung ${invoice.number}`,
+    second: `2. Erinnerung — Rechnung ${invoice.number} überfällig`,
+    final:  `Letzte Mahnung — Rechnung ${invoice.number}`,
+  };
+
+  const itemsRows = invoice.items.map(i =>
+    `<tr><td style="padding:6px 10px;border:1px solid #eee;">${i.description}</td>
+     <td style="padding:6px 10px;border:1px solid #eee;text-align:right;">€${i.total.toFixed(2)}</td></tr>`
+  ).join('');
+
+  const html = `<!DOCTYPE html>
+<html lang="de">
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:0 auto;padding:20px;">
+  <div style="background:#1a1a2e;padding:16px 24px;border-radius:8px 8px 0 0;">
+    <h1 style="color:#f0a500;margin:0;font-size:20px;">${agencyName}</h1>
+  </div>
+  <div style="border:1px solid #ddd;border-top:none;padding:24px;border-radius:0 0 8px 8px;">
+    <p>Sehr geehrte/r ${clientName},</p>
+    <p>${urgency === 'final'
+      ? 'trotz unserer bisherigen Erinnerungen ist folgende Rechnung noch offen:'
+      : 'wir möchten Sie freundlich an die folgende offene Rechnung erinnern:'}</p>
+
+    <table style="width:100%;border-collapse:collapse;font-size:14px;margin:16px 0;">
+      <tr style="background:#f5f5f5;">
+        <th style="padding:8px 10px;text-align:left;border:1px solid #eee;">Rechnungsnummer</th>
+        <td style="padding:8px 10px;border:1px solid #eee;"><b>${invoice.number}</b></td>
+      </tr>
+      <tr>
+        <th style="padding:8px 10px;text-align:left;border:1px solid #eee;">Fälligkeitsdatum</th>
+        <td style="padding:8px 10px;border:1px solid #eee;color:#c0392b;">${invoice.due_date} (${daysPastDue} Tage überfällig)</td>
+      </tr>
+      <tr style="background:#f5f5f5;">
+        <th style="padding:8px 10px;text-align:left;border:1px solid #eee;">Gesamtbetrag</th>
+        <td style="padding:8px 10px;border:1px solid #eee;"><b>€${invoice.total.toFixed(2)} ${invoice.currency}</b></td>
+      </tr>
+    </table>
+
+    <h3 style="font-size:14px;color:#555;">Leistungen:</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <tbody>${itemsRows}</tbody>
+    </table>
+
+    <div style="background:#fff8e1;border-left:4px solid #f0a500;padding:12px 16px;margin:20px 0;border-radius:0 4px 4px 0;">
+      <p style="margin:0;font-size:14px;">Bitte überweisen Sie den Betrag von <b>€${invoice.total.toFixed(2)}</b> zeitnah.</p>
+      ${invoice.notes ? `<p style="margin:8px 0 0;font-size:13px;color:#666;">${invoice.notes}</p>` : ''}
+    </div>
+
+    <p>Bei Fragen stehen wir gerne zur Verfügung.</p>
+    <p>Mit freundlichen Grüßen,<br><b>${agencyName}</b><br>${agencyEmail}</p>
+  </div>
+  <p style="text-align:center;font-size:11px;color:#bbb;margin-top:12px;">Automatisch generiert — ${new Date().toLocaleDateString('de-AT')}</p>
+</body></html>`;
+
+  return { subject: subjects[urgency], html, to: clientEmail };
+}
+
+// ── Invoice Email ─────────────────────────────────────────────────────────────
+
+export function buildInvoiceEmail(invoice) {
+  const clientName  = invoice.client?.name  || 'Klijent';
+  const clientEmail = invoice.client?.email || '';
+  const agencyName  = 'Digital Nature';
+  const agencyEmail = process.env.SMTP_FROM || process.env.SMTP_USER || '';
+
+  const itemsRows = invoice.items.map(i =>
+    `<tr>
+       <td style="padding:8px 12px;border:1px solid #eee;">${i.description}</td>
+       <td style="padding:8px 12px;border:1px solid #eee;text-align:center;">${i.qty}</td>
+       <td style="padding:8px 12px;border:1px solid #eee;text-align:right;">€${i.unit_price.toFixed(2)}</td>
+       <td style="padding:8px 12px;border:1px solid #eee;text-align:right;"><b>€${i.total.toFixed(2)}</b></td>
+     </tr>`
+  ).join('');
+
+  const html = `<!DOCTYPE html>
+<html lang="de">
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:0 auto;padding:20px;">
+  <div style="background:#1a1a2e;padding:16px 24px;border-radius:8px 8px 0 0;">
+    <h1 style="color:#f0a500;margin:0;font-size:20px;">${agencyName}</h1>
+    <p style="color:#aaa;margin:4px 0 0;font-size:13px;">Rechnung ${invoice.number}</p>
+  </div>
+  <div style="border:1px solid #ddd;border-top:none;padding:24px;border-radius:0 0 8px 8px;">
+    <p>Sehr geehrte/r ${clientName},</p>
+    <p>anbei erhalten Sie Ihre Rechnung für den abgelaufenen Leistungszeitraum.</p>
+
+    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px;">
+      <tr style="background:#f5f5f5;">
+        <th style="padding:6px 10px;text-align:left;border:1px solid #eee;">Leistung</th>
+        <th style="padding:6px 10px;text-align:center;border:1px solid #eee;">Menge</th>
+        <th style="padding:6px 10px;text-align:right;border:1px solid #eee;">Einzelpreis</th>
+        <th style="padding:6px 10px;text-align:right;border:1px solid #eee;">Gesamt</th>
+      </tr>
+      ${itemsRows}
+    </table>
+
+    <table style="width:100%;border-collapse:collapse;font-size:14px;margin:16px 0 0 0;">
+      <tr><td style="padding:6px 10px;text-align:right;">Subtotal:</td><td style="padding:6px 10px;text-align:right;width:120px;">€${invoice.subtotal.toFixed(2)}</td></tr>
+      ${invoice.tax_rate > 0 ? `<tr><td style="padding:6px 10px;text-align:right;">MwSt ${invoice.tax_rate}%:</td><td style="padding:6px 10px;text-align:right;">€${invoice.tax_amount.toFixed(2)}</td></tr>` : ''}
+      <tr style="background:#1a1a2e;color:white;">
+        <td style="padding:8px 10px;text-align:right;font-weight:bold;">Gesamtbetrag:</td>
+        <td style="padding:8px 10px;text-align:right;font-weight:bold;">€${invoice.total.toFixed(2)} ${invoice.currency}</td>
+      </tr>
+    </table>
+
+    <div style="background:#f0f9f0;border-left:4px solid #27ae60;padding:12px 16px;margin:20px 0;border-radius:0 4px 4px 0;">
+      <p style="margin:0;font-size:13px;">Fälligkeitsdatum: <b>${invoice.due_date}</b></p>
+      ${invoice.notes ? `<p style="margin:6px 0 0;font-size:12px;color:#666;">${invoice.notes}</p>` : ''}
+    </div>
+
+    <p>Vielen Dank für Ihr Vertrauen!</p>
+    <p>Mit freundlichen Grüßen,<br><b>${agencyName}</b><br>${agencyEmail}</p>
+  </div>
+  <p style="text-align:center;font-size:11px;color:#bbb;margin-top:12px;">Rechnung ${invoice.number} — ${invoice.issue_date}</p>
+</body></html>`;
+
+  return { subject: `Rechnung ${invoice.number} — ${agencyName}`, html, to: clientEmail };
+}
+
+// ── Monthly Report Email ──────────────────────────────────────────────────────
+
+export function buildMonthlyReportEmail({ client, month, uptime, deploys, careActivities, perfScore, seoSummary }) {
+  const clientName  = client?.name  || 'Klijent';
+  const clientEmail = client?.email || '';
+  const agencyName  = 'Digital Nature';
+  const domain      = client?.domain || '';
+
+  const activitiesHtml = (careActivities || []).map(a =>
+    `<li style="padding:4px 0;font-size:13px;">✅ ${a.description || a.type}</li>`
+  ).join('') || '<li style="font-size:13px;color:#888;">Keine Aktivitäten erfasst</li>';
+
+  const html = `<!DOCTYPE html>
+<html lang="de">
+<head><meta charset="UTF-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;max-width:600px;margin:0 auto;padding:20px;">
+  <div style="background:#1a1a2e;padding:16px 24px;border-radius:8px 8px 0 0;">
+    <h1 style="color:#f0a500;margin:0;font-size:20px;">${agencyName}</h1>
+    <p style="color:#aaa;margin:4px 0 0;font-size:13px;">Monatsbericht ${month} — ${domain}</p>
+  </div>
+  <div style="border:1px solid #ddd;border-top:none;padding:24px;border-radius:0 0 8px 8px;">
+    <p>Sehr geehrte/r ${clientName},</p>
+    <p>hier ist Ihr monatlicher Statusbericht für <b>${domain}</b>.</p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0;">
+      <div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center;">
+        <div style="font-size:28px;font-weight:bold;color:${uptime >= 99 ? '#27ae60' : '#e67e22'};">${uptime}%</div>
+        <div style="font-size:12px;color:#666;margin-top:4px;">Verfügbarkeit</div>
+      </div>
+      <div style="background:#f8f9fa;padding:16px;border-radius:8px;text-align:center;">
+        <div style="font-size:28px;font-weight:bold;color:${perfScore >= 90 ? '#27ae60' : perfScore >= 50 ? '#e67e22' : '#e74c3c'};">${perfScore || 'N/A'}</div>
+        <div style="font-size:12px;color:#666;margin-top:4px;">Performance Score</div>
+      </div>
+    </div>
+
+    <h3 style="font-size:15px;color:#1a1a2e;border-bottom:2px solid #f0a500;padding-bottom:6px;">🔧 Durchgeführte Arbeiten</h3>
+    <ul style="padding-left:20px;margin:8px 0;">${activitiesHtml}</ul>
+
+    ${deploys > 0 ? `<p style="font-size:13px;color:#555;">🚀 Deployments diesen Monat: <b>${deploys}</b></p>` : ''}
+
+    ${seoSummary ? `
+    <h3 style="font-size:15px;color:#1a1a2e;border-bottom:2px solid #f0a500;padding-bottom:6px;">📊 SEO Übersicht</h3>
+    <p style="font-size:13px;">${seoSummary}</p>` : ''}
+
+    <div style="background:#f0f9ff;border-left:4px solid #3498db;padding:12px 16px;margin:20px 0;border-radius:0 4px 4px 0;">
+      <p style="margin:0;font-size:13px;">Bei Fragen oder Wünschen stehen wir jederzeit zur Verfügung.</p>
+    </div>
+
+    <p>Mit freundlichen Grüßen,<br><b>${agencyName}</b></p>
+  </div>
+  <p style="text-align:center;font-size:11px;color:#bbb;margin-top:12px;">Automatischer Monatsbericht — ${new Date().toLocaleDateString('de-AT')}</p>
+</body></html>`;
+
+  return {
+    subject: `Monatsbericht ${month} — ${domain}`,
+    html,
+    to: clientEmail,
+  };
+}
