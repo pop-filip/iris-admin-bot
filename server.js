@@ -32,7 +32,7 @@ import { listContainers, getContainerLogs, restartContainer, stopContainer, star
 import { analyzeContainerLogs, checkAllContainers, getRecentErrors, formatLogReport, formatFullLogReport } from './loganalyzer.js';
 import { checkPaymentReminders, sendManualReminder, formatPaymentReminderReport } from './payment.js';
 import { sendMonthlyReport, sendAllMonthlyReports, generateClientReport, formatReportPreview } from './monthlyreport.js';
-import { registerTelegramWebhook, registerCommand, setupWebhook, getHelp } from './telegram-commands.js';
+import { registerTelegramWebhook, registerCommand, setupWebhook, getHelp, registerAiChatHandler } from './telegram-commands.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -3371,6 +3371,43 @@ cron.schedule('0 8 * * 1', async () => {
     console.error('[CRON] SEO report greška:', e.message);
   }
 }, { timezone: 'Europe/Vienna' });
+
+// ── Telegram AI Chat Handler ──────────────────────────────────────────────────
+registerAiChatHandler(async (message, history) => {
+  const messages = [
+    ...history.slice(-16).filter(m => m.role && m.content),
+    { role: 'user', content: message }
+  ];
+
+  let response = await client.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 1024,
+    system: ADMIN_SYSTEM,
+    tools: ADMIN_TOOLS,
+    messages
+  });
+
+  while (response.stop_reason === 'tool_use') {
+    const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
+    const toolResults = await Promise.all(
+      toolUseBlocks.map(async tb => {
+        const result = await handleAdminTool(tb.name, tb.input);
+        return { type: 'tool_result', tool_use_id: tb.id, content: JSON.stringify(result) };
+      })
+    );
+    messages.push({ role: 'assistant', content: response.content });
+    messages.push({ role: 'user', content: toolResults });
+    response = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      system: ADMIN_SYSTEM,
+      tools: ADMIN_TOOLS,
+      messages
+    });
+  }
+
+  return response.content.find(b => b.type === 'text')?.text ?? '(nema odgovora)';
+});
 
 // ── Health endpoint ───────────────────────────────────────────────────────────
 registerHealthEndpoint(app);

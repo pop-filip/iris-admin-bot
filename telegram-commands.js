@@ -11,6 +11,13 @@ import { sendTelegram } from './notify.js';
 const BOT_TOKEN  = process.env.TELEGRAM_BOT_TOKEN;
 const ADMIN_CHAT = process.env.ADMIN_TELEGRAM_ID;
 
+// AI chat handler — postavlja server.js pri startup
+let _aiChatHandler = null;
+export function registerAiChatHandler(fn) { _aiChatHandler = fn; }
+
+// Per-chat history (max 10 poruka)
+const chatHistory = new Map();
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 function isAdmin(chatId) {
@@ -57,7 +64,27 @@ export async function handleTelegramUpdate(update) {
   const [rawCmd, ...args] = text.split(/\s+/);
   const cmd = rawCmd.startsWith('/') ? rawCmd.slice(1).toLowerCase() : null;
 
-  if (!cmd) return;
+  // ── Slobodni AI chat (bez /) ──────────────────────────────────────────────
+  if (!cmd) {
+    if (!_aiChatHandler) {
+      await sendTelegram('⚠️ AI chat nije inicijaliziran.');
+      return;
+    }
+    await sendTyping(chatId);
+    const history = chatHistory.get(chatId) || [];
+    try {
+      const reply = await _aiChatHandler(text, history);
+      history.push({ role: 'user', content: text });
+      history.push({ role: 'assistant', content: reply });
+      if (history.length > 20) history.splice(0, history.length - 20);
+      chatHistory.set(chatId, history);
+      await sendTelegram(reply);
+    } catch (e) {
+      console.error('[Telegram AI] Greška:', e.message);
+      await sendTelegram(`❌ AI greška: ${e.message}`);
+    }
+    return;
+  }
 
   const command = commands.get(cmd);
   if (!command) {
