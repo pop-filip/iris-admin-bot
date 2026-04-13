@@ -50,6 +50,16 @@ initSchema();
 // ── Google Auth (reuse iz seo.js pattern) ────────────────────────────────────
 
 function getAuth() {
+  // OAuth2 (primarno)
+  const clientId     = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+  if (clientId && clientSecret && refreshToken) {
+    const oauth2 = new google.auth.OAuth2(clientId, clientSecret);
+    oauth2.setCredentials({ refresh_token: refreshToken });
+    return oauth2;
+  }
+  // Service Account fallback
   const keyPath = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH;
   const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!keyPath && !keyJson) return null;
