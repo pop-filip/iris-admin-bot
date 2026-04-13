@@ -47,8 +47,9 @@ function getAuth() {
     _auth = new google.auth.GoogleAuth({
       credentials,
       scopes: [
-        'https://www.googleapis.com/auth/webmasters.readonly',
+        'https://www.googleapis.com/auth/webmasters',
         'https://www.googleapis.com/auth/analytics.readonly',
+        'https://www.googleapis.com/auth/indexing',
       ],
     });
     return _auth;
@@ -483,6 +484,408 @@ export async function formatWeeklyReportAll(days = 7) {
   const reports = await Promise.all(SEO_SITES.map(site => getSeoReport(site.domain, days)));
   const parts = reports.map(r => formatSeoReportTelegram(r));
   return parts.join('\n━━━━━━━━━━━━━━━━━━━━━━━━━\n\n');
+}
+
+// ── URL Inspection (detaljna analiza jednog URL-a) ────────────────────────────
+
+export async function inspectUrl(url) {
+  const auth = getAuth();
+  if (!auth) return { error: 'Google credentials nisu konfigurirani.' };
+
+  try {
+    const domain = new URL(url).hostname;
+    const site   = getSite(domain);
+    if (!site) return { error: `Domena "${domain}" nije u SEO_SITES.` };
+
+    const searchconsole = google.searchconsole({ version: 'v1', auth });
+    const res = await searchconsole.urlInspection.index.inspect({
+      requestBody: { inspectionUrl: url, siteUrl: site.scProperty },
+    });
+
+    const r   = res.data.inspectionResult;
+    const idx = r?.indexStatusResult || {};
+    const mob = r?.mobileUsabilityResult || {};
+    const rich = r?.richResultsResult || {};
+
+    return {
+      url,
+      indexing: {
+        verdict:       idx.verdict,           // PASS | FAIL | NEUTRAL
+        coverageState: idx.coverageState,     // npr. "Submitted and indexed"
+        robotsTxt:     idx.robotsTxtState,    // ALLOWED | DISALLOWED
+        indexingState: idx.indexingState,     // INDEXING_ALLOWED | ...
+        lastCrawl:     idx.lastCrawlTime,
+        crawledAs:     idx.crawledAs,         // DESKTOP | MOBILE
+        canonicalGoogle:  idx.googleCanonical,
+        canonicalUser:    idx.userCanonical,
+        sitemap:       idx.sitemap || [],
+      },
+      mobile: {
+        verdict: mob.verdict,
+        issues:  (mob.issues || []).map(i => i.message),
+      },
+      richResults: {
+        verdict: rich.verdict,
+        items:   (rich.items || []).map(i => ({ type: i.name, issues: i.items?.length || 0 })),
+      },
+    };
+  } catch (e) {
+    return { error: `URL inspection greška: ${e.message}` };
+  }
+}
+
+// ── Coverage Report (indexirane vs neindeksirane stranice) ────────────────────
+
+export async function getCoverageReport(domain) {
+  const site = getSite(domain);
+  if (!site) return { error: `Sajt "${domain}" nije konfiguriran.` };
+
+  const auth = getAuth();
+  if (!auth) return { error: 'Google credentials nisu konfigurirani.' };
+
+  try {
+    const webmasters = google.webmasters({ version: 'v3', auth });
+
+    // Dohvati sitemap-e i njihove indexing stats
+    const sitemapsRes = await webmasters.sitemaps.list({ siteUrl: site.scProperty });
+    const sitemaps    = sitemapsRes.data.sitemap || [];
+
+    const coverage = sitemaps.map(s => {
+      const content   = s.contents?.[0] || {};
+      const submitted = parseInt(content.submitted || 0);
+      const indexed   = parseInt(content.indexed   || 0);
+      return {
+        sitemapUrl: s.path,
+        submitted,
+        indexed,
+        notIndexed:    submitted - indexed,
+        indexingRate:  submitted > 0 ? Math.round((indexed / submitted) * 100) : 0,
+        warnings:      parseInt(s.warnings || 0),
+        errors:        parseInt(s.errors   || 0),
+        lastSubmitted: s.lastSubmitted,
+        isPending:     s.isPending || false,
+      };
+    });
+
+    const totalSubmitted = coverage.reduce((s, c) => s + c.submitted, 0);
+    const totalIndexed   = coverage.reduce((s, c) => s + c.indexed,   0);
+
+    return {
+      domain,
+      totalSubmitted,
+      totalIndexed,
+      totalNotIndexed: totalSubmitted - totalIndexed,
+      overallRate: totalSubmitted > 0 ? Math.round((totalIndexed / totalSubmitted) * 100) : 0,
+      sitemaps: coverage,
+    };
+  } catch (e) {
+    return { error: `Coverage report greška: ${e.message}` };
+  }
+}
+
+// ── Sitemap Management ────────────────────────────────────────────────────────
+
+export async function listSitemaps(domain) {
+  const site = getSite(domain);
+  if (!site) return { error: `Sajt "${domain}" nije konfiguriran.` };
+
+  const auth = getAuth();
+  if (!auth) return { error: 'Google credentials nisu konfigurirani.' };
+
+  try {
+    const webmasters = google.webmasters({ version: 'v3', auth });
+    const res = await webmasters.sitemaps.list({ siteUrl: site.scProperty });
+
+    return {
+      domain,
+      sitemaps: (res.data.sitemap || []).map(s => ({
+        url:           s.path,
+        lastSubmitted: s.lastSubmitted,
+        isPending:     s.isPending,
+        indexed:       s.contents?.[0]?.indexed   || 0,
+        submitted:     s.contents?.[0]?.submitted || 0,
+        warnings:      s.warnings || 0,
+        errors:        s.errors   || 0,
+      })),
+    };
+  } catch (e) {
+    return { error: `Sitemap list greška: ${e.message}` };
+  }
+}
+
+export async function deleteSitemap(domain, sitemapUrl) {
+  const site = getSite(domain);
+  if (!site) return { error: `Sajt "${domain}" nije konfiguriran.` };
+
+  const auth = getAuth();
+  if (!auth) return { error: 'Google credentials nisu konfigurirani.' };
+
+  try {
+    const webmasters = google.webmasters({ version: 'v3', auth });
+    await webmasters.sitemaps.delete({ siteUrl: site.scProperty, feedpath: sitemapUrl });
+    return { ok: true, deleted: sitemapUrl };
+  } catch (e) {
+    return { error: `Sitemap delete greška: ${e.message}` };
+  }
+}
+
+// ── Traffic Trend (usporedba perioda) ─────────────────────────────────────────
+
+export async function getTrafficTrend(domain, days = 28) {
+  const site = getSite(domain);
+  if (!site) return { error: `Sajt "${domain}" nije konfiguriran.` };
+
+  const auth = getAuth();
+  if (!auth) return { error: 'Google credentials nisu konfigurirani.' };
+
+  try {
+    const webmasters = google.webmasters({ version: 'v3', auth });
+    const endDate    = new Date();
+    const startDate  = new Date(Date.now() - days * 86400000);
+    const fmt = d => d.toISOString().split('T')[0];
+
+    const res = await webmasters.searchanalytics.query({
+      siteUrl: site.scProperty,
+      requestBody: {
+        startDate: fmt(startDate),
+        endDate:   fmt(endDate),
+        dimensions: ['date'],
+        rowLimit: days,
+        orderBy: [{ fieldName: 'date', sortOrder: 'ASCENDING' }],
+      },
+    });
+
+    const rows = (res.data.rows || []).map(r => ({
+      date:        r.keys[0],
+      clicks:      r.clicks,
+      impressions: r.impressions,
+      ctr:         parseFloat((r.ctr * 100).toFixed(2)),
+      position:    parseFloat(r.position.toFixed(1)),
+    }));
+
+    // Summary: prva vs zadnja sedmica
+    const half   = Math.floor(rows.length / 2);
+    const first  = rows.slice(0, half);
+    const second = rows.slice(half);
+    const avg = (arr, key) => arr.length ? Math.round(arr.reduce((s, r) => s + r[key], 0) / arr.length) : 0;
+
+    return {
+      domain,
+      days,
+      trend: rows,
+      comparison: {
+        firstHalf:  { avgClicks: avg(first, 'clicks'),  avgImpressions: avg(first, 'impressions') },
+        secondHalf: { avgClicks: avg(second, 'clicks'), avgImpressions: avg(second, 'impressions') },
+        clicksGrowth: first.length && avg(first, 'clicks') > 0
+          ? Math.round(((avg(second, 'clicks') - avg(first, 'clicks')) / avg(first, 'clicks')) * 100)
+          : null,
+      },
+    };
+  } catch (e) {
+    return { error: `Traffic trend greška: ${e.message}` };
+  }
+}
+
+// ── Traffic by Country ────────────────────────────────────────────────────────
+
+export async function getTrafficByCountry(domain, days = 28) {
+  const site = getSite(domain);
+  if (!site) return { error: `Sajt "${domain}" nije konfiguriran.` };
+
+  const auth = getAuth();
+  if (!auth) return { error: 'Google credentials nisu konfigurirani.' };
+
+  try {
+    const webmasters = google.webmasters({ version: 'v3', auth });
+    const endDate    = new Date();
+    const startDate  = new Date(Date.now() - days * 86400000);
+    const fmt = d => d.toISOString().split('T')[0];
+
+    const res = await webmasters.searchanalytics.query({
+      siteUrl: site.scProperty,
+      requestBody: {
+        startDate: fmt(startDate),
+        endDate:   fmt(endDate),
+        dimensions: ['country'],
+        rowLimit: 15,
+        orderBy: [{ fieldName: 'clicks', sortOrder: 'DESCENDING' }],
+      },
+    });
+
+    return {
+      domain,
+      countries: (res.data.rows || []).map(r => ({
+        country:     r.keys[0].toUpperCase(),
+        clicks:      r.clicks,
+        impressions: r.impressions,
+        position:    parseFloat(r.position.toFixed(1)),
+      })),
+    };
+  } catch (e) {
+    return { error: `Country traffic greška: ${e.message}` };
+  }
+}
+
+// ── Page Deep-Dive ────────────────────────────────────────────────────────────
+
+export async function getPageReport(domain, pagePath, days = 28) {
+  const site = getSite(domain);
+  if (!site) return { error: `Sajt "${domain}" nije konfiguriran.` };
+
+  const auth = getAuth();
+  if (!auth) return { error: 'Google credentials nisu konfigurirani.' };
+
+  try {
+    const webmasters = google.webmasters({ version: 'v3', auth });
+    const pageUrl    = pagePath.startsWith('http') ? pagePath : `https://${domain}${pagePath}`;
+    const endDate    = new Date();
+    const startDate  = new Date(Date.now() - days * 86400000);
+    const fmt = d => d.toISOString().split('T')[0];
+
+    const [queriesRes, devicesRes] = await Promise.all([
+      // Keywords za ovu stranicu
+      webmasters.searchanalytics.query({
+        siteUrl: site.scProperty,
+        requestBody: {
+          startDate: fmt(startDate),
+          endDate:   fmt(endDate),
+          dimensions: ['query'],
+          dimensionFilterGroups: [{ filters: [{ dimension: 'page', operator: 'equals', expression: pageUrl }] }],
+          rowLimit: 15,
+          orderBy: [{ fieldName: 'impressions', sortOrder: 'DESCENDING' }],
+        },
+      }),
+      // Devices za ovu stranicu
+      webmasters.searchanalytics.query({
+        siteUrl: site.scProperty,
+        requestBody: {
+          startDate: fmt(startDate),
+          endDate:   fmt(endDate),
+          dimensions: ['device'],
+          dimensionFilterGroups: [{ filters: [{ dimension: 'page', operator: 'equals', expression: pageUrl }] }],
+        },
+      }),
+    ]);
+
+    return {
+      url: pageUrl,
+      period: days,
+      keywords: (queriesRes.data.rows || []).map(r => ({
+        query:       r.keys[0],
+        clicks:      r.clicks,
+        impressions: r.impressions,
+        ctr:         parseFloat((r.ctr * 100).toFixed(1)),
+        position:    parseFloat(r.position.toFixed(1)),
+      })),
+      devices: (devicesRes.data.rows || []).map(r => ({
+        device:      r.keys[0],
+        clicks:      r.clicks,
+        impressions: r.impressions,
+      })),
+    };
+  } catch (e) {
+    return { error: `Page report greška: ${e.message}` };
+  }
+}
+
+// ── Search Appearance (web, image, video, news) ───────────────────────────────
+
+export async function getSearchAppearance(domain, days = 28) {
+  const site = getSite(domain);
+  if (!site) return { error: `Sajt "${domain}" nije konfiguriran.` };
+
+  const auth = getAuth();
+  if (!auth) return { error: 'Google credentials nisu konfigurirani.' };
+
+  try {
+    const webmasters = google.webmasters({ version: 'v3', auth });
+    const endDate    = new Date();
+    const startDate  = new Date(Date.now() - days * 86400000);
+    const fmt = d => d.toISOString().split('T')[0];
+
+    const res = await webmasters.searchanalytics.query({
+      siteUrl: site.scProperty,
+      requestBody: {
+        startDate: fmt(startDate),
+        endDate:   fmt(endDate),
+        dimensions: ['searchAppearance'],
+        rowLimit: 20,
+      },
+    });
+
+    return {
+      domain,
+      appearances: (res.data.rows || []).map(r => ({
+        type:        r.keys[0], // WEB, IMAGE, VIDEO, RICHCARD, AMP itd.
+        clicks:      r.clicks,
+        impressions: r.impressions,
+        ctr:         parseFloat((r.ctr * 100).toFixed(1)),
+        position:    parseFloat(r.position.toFixed(1)),
+      })),
+    };
+  } catch (e) {
+    return { error: `Search appearance greška: ${e.message}` };
+  }
+}
+
+// ── Formatiranje ──────────────────────────────────────────────────────────────
+
+export function formatCoverageReport(data) {
+  if (data.error) return `❌ ${data.error}`;
+  const lines = [
+    `📑 <b>Coverage Report — ${data.domain}</b>\n`,
+    `Indexirano: <b>${data.totalIndexed}</b> / ${data.totalSubmitted} stranica (${data.overallRate}%)`,
+    data.totalNotIndexed > 0 ? `⚠️ Nije indexirano: ${data.totalNotIndexed}` : `✅ Sve stranice indexirane`,
+    '',
+  ];
+  data.sitemaps.forEach(s => {
+    const icon = s.errors > 0 ? '🔴' : s.warnings > 0 ? '🟡' : '🟢';
+    lines.push(`${icon} <code>${s.sitemapUrl.split('/').pop()}</code>`);
+    lines.push(`   Indexirano: ${s.indexed}/${s.submitted} (${s.indexingRate}%)`);
+    if (s.errors)   lines.push(`   🔴 Greške: ${s.errors}`);
+    if (s.warnings) lines.push(`   ⚠️ Upozorenja: ${s.warnings}`);
+  });
+  return lines.join('\n');
+}
+
+export function formatUrlInspection(data) {
+  if (data.error) return `❌ ${data.error}`;
+  const verdictIcon = { PASS: '✅', FAIL: '❌', NEUTRAL: '⚠️' };
+  const lines = [
+    `🔎 <b>URL Inspection</b>`,
+    `<code>${data.url}</code>\n`,
+    `Indexing: ${verdictIcon[data.indexing.verdict] || '•'} ${data.indexing.coverageState || data.indexing.verdict}`,
+    `Robots.txt: ${data.indexing.robotsTxt}`,
+    `Zadnji crawl: ${data.indexing.lastCrawl ? new Date(data.indexing.lastCrawl).toLocaleDateString('de-AT') : 'N/A'}`,
+    `Crawled as: ${data.indexing.crawledAs || 'N/A'}`,
+  ];
+  if (data.indexing.canonicalGoogle !== data.indexing.canonicalUser) {
+    lines.push(`\n⚠️ <b>Canonical mismatch!</b>`);
+    lines.push(`User deklarira: <code>${data.indexing.canonicalUser}</code>`);
+    lines.push(`Google vidi: <code>${data.indexing.canonicalGoogle}</code>`);
+  }
+  if (data.mobile.verdict) {
+    const icon = data.mobile.verdict === 'PASS' ? '✅' : '❌';
+    lines.push(`\nMobile: ${icon} ${data.mobile.verdict}`);
+    data.mobile.issues.forEach(i => lines.push(`  ⚠️ ${i}`));
+  }
+  if (data.richResults.items?.length) {
+    lines.push(`\nRich Results:`);
+    data.richResults.items.forEach(i => lines.push(`  • ${i.type}${i.issues ? ` (${i.issues} problema)` : ''}`));
+  }
+  return lines.join('\n');
+}
+
+export function formatTrafficTrend(data) {
+  if (data.error) return `❌ ${data.error}`;
+  const c = data.comparison;
+  const arrow = c.clicksGrowth > 0 ? '▲' : c.clicksGrowth < 0 ? '▼' : '→';
+  const lines = [
+    `📈 <b>Traffic Trend — ${data.domain} (${data.days} dana)</b>\n`,
+    `Klikovi: ${c.firstHalf.avgClicks}/dan → ${c.secondHalf.avgClicks}/dan ${arrow} ${c.clicksGrowth !== null ? c.clicksGrowth + '%' : ''}`,
+    `Impressions: ${c.firstHalf.avgImpressions}/dan → ${c.secondHalf.avgImpressions}/dan`,
+  ];
+  return lines.join('\n');
 }
 
 // ── Exports za server.js ──────────────────────────────────────────────────────

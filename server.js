@@ -9,7 +9,7 @@ import { dirname, join } from 'path';
 import { searchProducts, countProducts, listProducts, addProduct, updateProduct, deleteProduct, getProductBySku, getCategories, logAudit, getAuditLog, exportProducts, findMissingData, getFeatured, setFeatured, getMarginReport, updateBuyPrice, addSupplier, listSuppliers, getSupplierByName, linkProductSupplier, getSupplierReport, addPriceRule, listPriceRules, deletePriceRule, applyPriceRules, getLowMarginProducts, updateSupplierFeed, getSuppliersWithFeed, syncSupplierFeed, executeSmartImport, getDailySummary, addOemNumber, searchByOem, listOemNumbers, removeOemNumber, setAlternative, getAlternatives, autoFindAlternatives, findByVehicle, getCompatibleMakes, setShippingInfo, getHazmatList, getShippingReport, addOrder, getOrder, listOrders, updateOrderStatus, setTracking, getOrderStats, listUnshipped, addRefund, getRefund, listRefunds, updateRefundStatus, getRefundStats } from './db/database.js';
 import { sendTelegram, formatOosAlert, formatPriceAlert } from './notify.js';
 import { sendEmail, buildSupplierOrderEmail, buildOrderConfirmationEmail, buildShippingNotificationEmail, buildRefundReceivedEmail, buildRefundApprovedEmail } from './email.js';
-import { isConfigured as isSeoConfigured, SEO_SITES, getSeoReport, formatSeoReportTelegram, formatWeeklyReportAll, submitSitemap, checkIndexing, requestIndexing, getGA4Report, getSearchConsoleReport } from './seo.js';
+import { isConfigured as isSeoConfigured, SEO_SITES, getSeoReport, formatSeoReportTelegram, formatWeeklyReportAll, submitSitemap, checkIndexing, requestIndexing, getGA4Report, getSearchConsoleReport, inspectUrl, getCoverageReport, listSitemaps, deleteSitemap, getTrafficTrend, getTrafficByCountry, getPageReport, getSearchAppearance, formatCoverageReport, formatUrlInspection, formatTrafficTrend } from './seo.js';
 import { checkAllSites, getUptimeStats, formatUptimeReport, MONITOR_SITES_LIST } from './monitor.js';
 import { checkAllSSL, checkAllDomains, getSSLStatus, formatSSLReport } from './ssl.js';
 import { checkAndAlert, getHealthSummary, formatHealthReport, registerHealthEndpoint } from './health.js';
@@ -1267,6 +1267,102 @@ const ADMIN_TOOLS = [
     }
   },
 
+  // ── Google SEO — Extended ─────────────────────────────────────────────────
+  {
+    name: 'inspect_url',
+    description: 'Detaljna Google inspekcija URL-a — indexing status, canonical, mobile usability, rich results, zadnji crawl.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Puni URL za inspekciju, npr. https://digitalnature.at/usluge.html' }
+      },
+      required: ['url']
+    }
+  },
+  {
+    name: 'coverage_report',
+    description: 'Coverage report — koliko stranica je indexirano vs submitovano, greške i upozorenja po sitemapu.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' }
+      },
+      required: ['domain']
+    }
+  },
+  {
+    name: 'list_sitemaps',
+    description: 'Lista svih submitovanih sitemapa u Google Search Console za domenu.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' }
+      },
+      required: ['domain']
+    }
+  },
+  {
+    name: 'delete_sitemap',
+    description: 'Briši sitemap iz Google Search Console.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain:      { type: 'string', description: 'Domena sajta' },
+        sitemap_url: { type: 'string', description: 'Puni URL sitemapa za brisanje' }
+      },
+      required: ['domain', 'sitemap_url']
+    }
+  },
+  {
+    name: 'traffic_trend',
+    description: 'Traffic trend — rast ili pad klikova i impressions tokom perioda (poređenje prve vs zadnje sedmice).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' },
+        days:   { type: 'number', description: 'Broj dana (default: 28)' }
+      },
+      required: ['domain']
+    }
+  },
+  {
+    name: 'traffic_by_country',
+    description: 'Klikovi i impressions po zemlji — odakle dolaze posjetitelji iz Google Searcha.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' },
+        days:   { type: 'number', description: 'Broj dana (default: 28)' }
+      },
+      required: ['domain']
+    }
+  },
+  {
+    name: 'page_report',
+    description: 'Deep-dive u jednu stranicu — koje keywords je donose promet, device split, CTR i pozicija.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' },
+        path:   { type: 'string', description: 'Path stranice, npr. /usluge.html ili /iris/' },
+        days:   { type: 'number', description: 'Broj dana (default: 28)' }
+      },
+      required: ['domain', 'path']
+    }
+  },
+  {
+    name: 'search_appearance',
+    description: 'Search appearance — kako se sajt pojavljuje u Googleu: Web, Image, Video, Rich results, AMP...',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' },
+        days:   { type: 'number', description: 'Broj dana (default: 28)' }
+      },
+      required: ['domain']
+    }
+  },
+
   // ── Web Operations (SEO implementacija) ──────────────────────────────────
   {
     name: 'list_sites',
@@ -2287,6 +2383,30 @@ async function handleAdminTool(name, input) {
       const history = getScoreHistory(input.domain, input.days || 30);
       return { domain: input.domain, history };
     }
+
+    // ── Google SEO Extended ──────────────────────────────────────────────────
+    case 'inspect_url': {
+      const result = await inspectUrl(input.url);
+      return { ...result, report: formatUrlInspection(result) };
+    }
+    case 'coverage_report': {
+      const result = await getCoverageReport(input.domain);
+      return { ...result, report: formatCoverageReport(result) };
+    }
+    case 'list_sitemaps':
+      return await listSitemaps(input.domain);
+    case 'delete_sitemap':
+      return await deleteSitemap(input.domain, input.sitemap_url);
+    case 'traffic_trend': {
+      const result = await getTrafficTrend(input.domain, input.days || 28);
+      return { ...result, report: formatTrafficTrend(result) };
+    }
+    case 'traffic_by_country':
+      return await getTrafficByCountry(input.domain, input.days || 28);
+    case 'page_report':
+      return await getPageReport(input.domain, input.path, input.days || 28);
+    case 'search_appearance':
+      return await getSearchAppearance(input.domain, input.days || 28);
 
     // ── Web Operations ───────────────────────────────────────────────────────
     case 'list_sites':
