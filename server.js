@@ -178,7 +178,7 @@ app.post('/api/chat', async (req, res) => {
     // Agentic loop — Claude poziva tools dok ne dobije konačan odgovor
     let response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+      max_tokens: 4096,
       system: SYSTEM_PROMPT,
       tools: TOOLS,
       messages
@@ -195,7 +195,7 @@ app.post('/api/chat', async (req, res) => {
       messages.push({ role: 'user', content: toolResults });
       response = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1024,
+        max_tokens: 4096,
         system: SYSTEM_PROMPT,
         tools: TOOLS,
         messages
@@ -2797,7 +2797,7 @@ app.post('/api/admin/chat', async (req, res) => {
   try {
     let response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+      max_tokens: 4096,
       system: ADMIN_SYSTEM,
       tools: ADMIN_TOOLS,
       messages
@@ -2815,7 +2815,7 @@ app.post('/api/admin/chat', async (req, res) => {
       messages.push({ role: 'user', content: toolResults });
       response = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1024,
+        max_tokens: 4096,
         system: ADMIN_SYSTEM,
         tools: ADMIN_TOOLS,
         messages
@@ -3381,7 +3381,7 @@ registerAiChatHandler(async (message, history) => {
 
   let response = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 1024,
+    max_tokens: 4096,
     system: ADMIN_SYSTEM,
     tools: ADMIN_TOOLS,
     messages
@@ -3399,7 +3399,7 @@ registerAiChatHandler(async (message, history) => {
     messages.push({ role: 'user', content: toolResults });
     response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
+      max_tokens: 4096,
       system: ADMIN_SYSTEM,
       tools: ADMIN_TOOLS,
       messages
