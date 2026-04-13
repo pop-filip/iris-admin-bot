@@ -88,7 +88,7 @@ export async function fetchKeywordPositions(domain, keywords, days = 7) {
     const endDate    = new Date().toISOString().split('T')[0];
     const startDate  = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
 
-    const scProperty = `sc-domain:${domain}`;
+    const scProperty = `https://${domain}/`;
 
     const res = await webmasters.searchanalytics.query({
       siteUrl: scProperty,
