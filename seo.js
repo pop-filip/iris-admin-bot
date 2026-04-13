@@ -34,6 +34,19 @@ let _auth = null;
 function getAuth() {
   if (_auth) return _auth;
 
+  // OAuth2 (CLIENT_ID + CLIENT_SECRET + REFRESH_TOKEN)
+  const clientId     = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
+
+  if (clientId && clientSecret && refreshToken) {
+    const oauth2 = new google.auth.OAuth2(clientId, clientSecret);
+    oauth2.setCredentials({ refresh_token: refreshToken });
+    _auth = oauth2;
+    return _auth;
+  }
+
+  // Service Account fallback
   const keyPath = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH;
   const keyJson = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
 
@@ -60,8 +73,9 @@ function getAuth() {
 }
 
 function isConfigured() {
-  return SEO_SITES.length > 0 &&
-    (process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const hasOAuth2 = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REFRESH_TOKEN);
+  const hasServiceAccount = !!(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH || process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  return SEO_SITES.length > 0 && (hasOAuth2 || hasServiceAccount);
 }
 
 function getSite(domain) {
