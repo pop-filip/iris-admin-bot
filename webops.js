@@ -66,9 +66,38 @@ export function readSiteFile(domain, filePath) {
   }
 }
 
+// Fajlovi koje Iris nikad ne smije pisati direktno
+const PROTECTED_FILES = ['index.html'];
+// Ekstenzije/fajlovi koje nikad ne smije brisati
+const PROTECTED_EXTENSIONS = ['.css','.js','.mp4','.webm','.webp','.jpg','.jpeg','.png','.svg','.gif','.woff','.woff2'];
+const PROTECTED_NAMES = ['manifest.json','robots.txt','sitemap.xml','sw.js','style.css'];
+const MAX_WRITE_SIZE = 50 * 1024; // 50KB
+
 export function writeSiteFile(domain, filePath, content, { backup = true } = {}) {
   const site = getSiteConfig(domain);
   if (!site) return { error: `Sajt '${domain}' nije konfiguriran u WEBOPS_SITES.` };
+
+  // Zaštita kritičnih fajlova
+  const fileName = filePath.split('/').pop();
+  if (PROTECTED_FILES.includes(fileName)) {
+    return { error: `⛔ ${fileName} je zaštićen fajl — Iris ne smije direktno editovati index.html. Korisnik mora to uraditi ručno ili tražiti specifičnu izmjenu.` };
+  }
+
+  // Zaštita ekstenzija
+  const ext = fileName.includes('.') ? '.' + fileName.split('.').pop() : '';
+  if (PROTECTED_EXTENSIONS.includes(ext)) {
+    return { error: `⛔ Fajlovi tipa ${ext} su zaštićeni od automatskog pisanja.` };
+  }
+
+  // Provjera veličine
+  if (content.length > MAX_WRITE_SIZE) {
+    return { error: `⛔ Sadržaj je prevelik (${Math.round(content.length/1024)}KB > 50KB limit). Korisnik mora editovati ručno.` };
+  }
+
+  // Provjera da sadržaj nije truncated
+  if (content.includes('<!-- [truncated] -->')) {
+    return { error: `⛔ Sadržaj je truncated (nepotpun) — pisanje bi pokvarilo fajl. Pročitaj fajl ponovo ili edituj samo specifičnu sekciju.` };
+  }
 
   try {
     const full = safePath(site.webroot, filePath);
@@ -76,14 +105,49 @@ export function writeSiteFile(domain, filePath, content, { backup = true } = {})
     // Kreiraj direktorij ako ne postoji
     mkdirSync(dirname(full), { recursive: true });
 
-    // Backup originalnog fajla
-    if (backup && existsSync(full)) {
+    // Backup originalnog fajla — UVIJEK
+    if (existsSync(full)) {
       const backupPath = full + '.bak';
       copyFileSync(full, backupPath);
     }
 
     writeFileSync(full, content, 'utf8');
-    return { ok: true, path: filePath, size: content.length };
+    return { ok: true, path: filePath, size: content.length, backed_up: existsSync(full + '.bak') };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+export function deleteSiteFile(domain, filePath) {
+  const site = getSiteConfig(domain);
+  if (!site) return { error: `Sajt '${domain}' nije konfiguriran u WEBOPS_SITES.` };
+
+  const fileName = filePath.split('/').pop();
+
+  // Zaštita kritičnih fajlova
+  if (PROTECTED_FILES.includes(fileName)) {
+    return { error: `⛔ ${fileName} je zaštićen — ne može se brisati.` };
+  }
+
+  // Zaštita ekstenzija i imena
+  const ext = fileName.includes('.') ? '.' + fileName.split('.').pop() : '';
+  if (PROTECTED_EXTENSIONS.includes(ext) || PROTECTED_NAMES.includes(fileName)) {
+    return { error: `⛔ ${fileName} je zaštićen od brisanja.` };
+  }
+
+  // Dozvoljeno samo brisanje backup/test fajlova
+  const safeToDelete = /backup|BACKUP|ORIGINAL|\.bak$|-test|-preview/i.test(fileName);
+  if (!safeToDelete) {
+    return { error: `⛔ Brisanje dozvoljeno samo za fajlove s "backup", "BACKUP", "ORIGINAL", "-test", "-preview" ili ".bak" u imenu. Za ostale fajlove korisnik mora brisati ručno.` };
+  }
+
+  try {
+    const full = safePath(site.webroot, filePath);
+    if (!existsSync(full)) return { error: `Fajl ne postoji: ${filePath}` };
+    // Backup prije brisanja
+    copyFileSync(full, full + '.deleted.bak');
+    import('fs').then(({ unlinkSync }) => unlinkSync(full));
+    return { ok: true, path: filePath, message: `Obrisano. Backup spremnjen kao ${filePath}.deleted.bak` };
   } catch (e) {
     return { error: e.message };
   }
