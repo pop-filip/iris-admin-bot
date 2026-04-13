@@ -1,25 +1,26 @@
 # Iris Admin Bot — Dokumentacija
 
-**Verzija:** 3.2
+**Verzija:** 4.0
 **Zadnje ažuriranje:** 2026-04-13
 **Produkcija:** https://iris.digitalnature.at/admin.html
 **Server:** Hetzner VPS 157.180.67.68 — Docker + Traefik
 **Repo:** github.com/pop-filip/iris-admin-bot
+**Telegram bot:** @iriskaadminka_bot
 
 ---
 
 ## Pregled
 
-Iris je AI admin asistent za Digital Nature. Radi kao kompletan digitalni zaposleni — upravlja dropshipping shopovima, implementira SEO promjene direktno na sajtovima, prati Google Analytics i Search Console, monitorira infrastrukturu, vodi CRM, generiše fakture, loguje deploye i bilježi leads. Radi 24/7 autonomno — šalje alertove na Telegram i prima komande direktno iz chata.
+Iris je AI admin asistent za Digital Nature. Radi kao kompletan digitalni zaposleni — upravlja dropshipping shopovima, implementira SEO promjene direktno na sajtovima, prati Google Analytics i Search Console, monitorira infrastrukturu, vodi CRM, generiše fakture, loguje deploye i bilježi leads. Radi 24/7 autonomno — šalje alertove na Telegram i prima komande direktno iz chata. Podržava slobodni AI chat (bez /) direktno u Telegramu.
 
 **Stack:**
 - Node.js (ESM) + Express
-- Claude Haiku (Anthropic API) — agentic tool_use loop
+- Claude Haiku (Anthropic API) — agentic tool_use loop, 130+ tools
 - SQLite (better-sqlite3) — tri DB fajla: `shop.db`, `leads.db`, `agency.db`
-- node-cron — scheduled tasks
-- Telegram Bot API — slanje + primanje komandi
+- node-cron — 16 scheduled tasks
+- Telegram Bot API — slanje + primanje komandi + slobodni AI chat
 - Nodemailer — email automation
-- googleapis — Google SEO APIs (GA4 + Search Console + URL Inspection)
+- googleapis — Google SEO APIs (GA4 + Search Console + URL Inspection) via OAuth2
 - Google PageSpeed Insights API
 - Docker + Traefik v3
 
@@ -29,27 +30,34 @@ Iris je AI admin asistent za Digital Nature. Radi kao kompletan digitalni zaposl
 
 ```
 iris-admin-bot/
-├── server.js              # Glavni server, Express, 120+ TOOLS, agentic loop
+├── server.js              # Glavni server, Express, 130+ TOOLS, agentic loop
 ├── db/database.js         # SQLite — shop.db (produkti, narudžbe, dobavljači...)
-├── leads.js               # Lead tracker — SQLite leads.db
-├── clients.js             # Client CRM — SQLite agency.db
+├── leads.js               # Lead tracker — SQLite leads.db + follow-up
+├── clients.js             # Client CRM — SQLite agency.db + churn predictor
 ├── careplan.js            # Care Plan Manager
 ├── invoice.js             # Invoice Generator (DN-YYYY-NNN)
 ├── deploylog.js           # Deploy historija po projektu
 ├── backup.js              # Backup verifikator
 ├── competitor.js          # Competitor keyword tracker (Search Console)
-├── seo.js                 # Google GA4 + Search Console — full suite
+├── seo.js                 # Google GA4 + Search Console — full suite (OAuth2)
 ├── webops.js              # Web Operations — čita/piše fajlove na sajtovima
 ├── monitor.js             # Uptime monitoring
 ├── ssl.js                 # SSL + domain expiry monitoring
 ├── health.js              # Server + Docker health
 ├── digest.js              # Weekly digest — sve u jednoj poruci
 ├── timetrack.js           # Time tracker — sati po projektu/klijentu
-├── revenue.js             # Revenue dashboard — MRR, pipeline, churn
+├── revenue.js             # Revenue dashboard — MRR, pipeline, churn, profit
 ├── pagespeed.js           # Google PageSpeed Insights score tracking
-├── telegram-commands.js   # Telegram webhook + command handler
+├── docker.js              # Docker container management
+├── loganalyzer.js         # Docker log parser — 5xx, spore stranice, auth fail
+├── payment.js             # Auto payment reminders (3/7/14 dana)
+├── monthlyreport.js       # Monthly report email za klijente
+├── precheck.js            # Pre-deploy checker — broken links, meta, alt
+├── linkscanner.js         # Tjedni broken link scanner
+├── formmonitor.js         # Dnevni test contact formi
+├── telegram-commands.js   # Telegram webhook + command handler + AI chat
 ├── notify.js              # Telegram sendTelegram helper
-├── email.js               # Nodemailer email automation
+├── email.js               # Nodemailer email automation + 5 templates
 └── html/
     └── admin.html         # Admin panel (web UI)
 ```
@@ -70,8 +78,8 @@ iris-admin-bot/
 # Na Hetzner VPS
 cd /var/www/iris-admin-bot
 git pull
-docker compose build --no-cache
-docker compose up -d
+docker compose down
+docker compose up -d --build
 ```
 
 **Docker container:** `iris-admin-bot` (port 3003)
@@ -79,7 +87,7 @@ docker compose up -d
 
 ---
 
-## .env konfiguracija
+## .env konfiguracija (produkcija)
 
 ```env
 # Core
@@ -93,40 +101,48 @@ SHOP_DOMAIN=best-price-autoteile.at
 SHOP_LANG=de
 CORS_ORIGINS=https://iris.digitalnature.at
 
-# Telegram
-TELEGRAM_BOT_TOKEN=           # BotFather token
-ADMIN_TELEGRAM_ID=            # userinfobot → tvoj chat ID
+# Telegram ✅ konfigurirano
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+ADMIN_TELEGRAM_ID=...
 
-# Monitoring
-MONITOR_SITES=digitalnature.at,matografie.at,frigodjukic.ba
+# Monitoring ✅ konfigurirano
+MONITOR_SITES=digitalnature.at,matografie.at,veselko.at
+SSL_DOMAINS=digitalnature.at,matografie.at,veselko.at
 
-# Google SEO (Google Cloud Service Account)
-GOOGLE_SERVICE_ACCOUNT_KEY_PATH=/var/www/iris-admin-bot/google-key.json
-# ili base64 JSON alternativa:
-# GOOGLE_SERVICE_ACCOUNT_JSON=eyJ0eXBlIjoi...
+# Google OAuth2 ✅ konfigurirano
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REFRESH_TOKEN=...
 
+# SEO Sajtovi ✅ konfigurirano
 SEO_SITES=[
-  {"name":"Digital Nature","domain":"digitalnature.at","ga4PropertyId":"properties/XXXXXXXXX","scProperty":"sc-domain:digitalnature.at"},
-  {"name":"Matografie","domain":"matografie.at","ga4PropertyId":"properties/YYYYYYYYY","scProperty":"sc-domain:matografie.at"}
+  {"name":"Digital Nature","domain":"digitalnature.at","ga4PropertyId":"properties/528705221","scProperty":"https://digitalnature.at/"},
+  {"name":"Matografie","domain":"matografie.at","ga4PropertyId":"properties/528705221","scProperty":"https://matografie.at/"}
 ]
 
-# Web Operations — pristup fajlovima na sajtovima
+# Web Operations ✅ konfigurirano
 WEBOPS_SITES=[
-  {"domain":"digitalnature.at","webroot":"/var/www/digital-nature-website/html/html","git":"/var/www/digital-nature-website"},
-  {"domain":"matografie.at","webroot":"/var/www/mato-website/html","git":"/var/www/mato-website"}
+  {"domain":"digitalnature.at","webroot":"/var/www/digital-nature-website/html/html"},
+  {"domain":"matografie.at","webroot":"/var/www/mato-website/html"},
+  {"domain":"veselko.at","webroot":"/var/www/veselko/html"}
+]
+
+# Form Monitor ✅ konfigurirano
+FORM_ENDPOINTS=[
+  {"name":"digitalnature.at","url":"https://iris.digitalnature.at/api/lead","method":"POST","body":{"name":"Monitor Test","email":"monitor@test.com","message":"Forma radi?"},"expectStatus":200}
 ]
 
 # Performance tracking
-PAGESPEED_API_KEY=            # optional, free tier radi i bez
+PAGESPEED_API_KEY=            # optional
 PERF_SITES=[{"name":"digitalnature.at","url":"https://digitalnature.at"}]
-PERF_DROP_THRESHOLD=10        # alert ako score padne >= 10 bodova
+PERF_DROP_THRESHOLD=10
 
 # Backup verifikator
 BACKUP_PATHS=[
   {"name":"digitalnature.at","path":"/var/backups/digitalnature","maxAgeHours":25},
   {"name":"iris DB","path":"/var/www/iris-admin-bot/db","maxAgeHours":25}
 ]
-BACKUP_SSH_HOST=root@157.180.67.68  # optional
 
 # Competitor keyword tracking
 COMPETITOR_KEYWORDS=[
@@ -134,16 +150,17 @@ COMPETITOR_KEYWORDS=[
   {"domain":"matografie.at","keywords":["videograf linz","hochzeitsvideograf österreich"]}
 ]
 
-# Email (SMTP)
+# Email (SMTP) ⏳ nije konfigurirano
 SMTP_HOST=
 SMTP_PORT=587
 SMTP_USER=
 SMTP_PASS=
 SMTP_FROM=
+AGENCY_NAME=Digital Nature
+AGENCY_URL=https://digitalnature.at
 
-# Cron (opcionalno, ima defaulte)
-SYNC_CRON=0 6 * * *
-SUMMARY_CRON=0 7 * * *
+# Trošak sata za profit kalkulator
+HOURLY_COST=25
 ```
 
 ---
@@ -175,247 +192,232 @@ Upravljanje katalogom, narudžbama i dobavljačima za `best-price-autoteile.at`.
 
 ### 2. SEO Agent — Google Analytics + Search Console
 
-Puna integracija sa Google APIs. Čita podatke, analizira, i može submitovati sitemap / tražiti reindexing.
+Puna integracija sa Google APIs via OAuth2. Čita podatke, analizira, i može submitovati sitemap / tražiti reindexing.
 
-> **Status:** Kod spreman. Aktivira se kad staviš Google Cloud Service Account credentials.
+> **Status:** ✅ Aktivno — digitalnature.at i matografie.at konfigurirani
 
 **Izvještaji i analiza:**
 
 | Tool | Opis |
 |------|------|
 | `seo_report` | GA4 + Search Console kombinovani tjedni report |
-| `traffic_trend` | Rast/pad klikova — poređenje prve vs zadnje sedmice perioda |
-| `traffic_by_country` | Odakle dolaze posjetitelji iz Googlea |
-| `page_report` | Deep-dive u jednu stranicu: keywords, devices, CTR, pozicija |
-| `search_appearance` | Web / Image / Video / Rich results / AMP pojavljivanje |
+| `traffic_trend` | Rast/pad klikova |
+| `traffic_by_country` | Odakle dolaze posjetitelji |
+| `page_report` | Deep-dive u jednu stranicu |
+| `search_appearance` | Web / Image / Rich results pojavljivanje |
 
 **Indexing i tehničko:**
 
 | Tool | Opis |
 |------|------|
-| `inspect_url` | Detaljna inspekcija: canonical, mobile, rich results, zadnji crawl |
-| `coverage_report` | Koliko stranica indexirano vs submitovano, greške po sitemapu |
-| `list_sitemaps` / `delete_sitemap` | Upravljanje sitemapima u GSC |
+| `inspect_url` | Detaljna inspekcija URL-a |
+| `coverage_report` | Indexirane vs submitovane stranice |
+| `list_sitemaps` / `delete_sitemap` | Upravljanje sitemapima |
 | `submit_sitemap` | Submitaj sitemap na Google |
 | `request_indexing` | Zatraži reindexing URL-a |
 | `check_indexing` | Status indexiranja |
-| `list_seo_sites` | Lista konfiguriranih sajtova |
-
-**GA4 podaci:** sessions, pageviews, bounce rate, avg. trajanje, novi korisnici, top stranice, scroll depth, CTA klikovi, contact klikovi, video play/complete.
-
-**Search Console podaci:** impressions, klikovi, CTR, avg. pozicija, top keywords, desktop vs mobile, indexing status, rich results.
 
 **Cronovi:**
 - Svaki ponedjeljak 8:00 → weekly SEO report za sve sajtove na Telegram
 
-**Setup (jednom):**
-1. Google Cloud → novi projekt `digital-nature-seo`
-2. Enable: Search Console API + Google Analytics Data API + URL Inspection API
-3. Service Account → JSON ključ → `/var/www/iris-admin-bot/google-key.json`
-4. Dodaj service account email kao Viewer u Search Console i GA4
-5. Dodaj `ga4PropertyId` u `SEO_SITES` .env
+**Auth:** OAuth2 (GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN)
 
 ---
 
 ### 3. Web Operations — SEO Implementacija
 
-Iris može direktno editovati HTML fajlove na live sajtovima, dodavati schema markup, meta tagove, ažurirati sitemap i deployati promjene. Iris živi na istom VPS-u kao i sajtovi.
-
-**Workflow:**
-```
-Ti + Iris pričate o SEO → Ti kažeš "dodaj to" → Iris implementira → deployjava → gotovo
-```
+Iris može direktno editovati HTML fajlove na live sajtovima, dodavati schema markup, meta tagove, ažurirati sitemap i deployati promjene.
 
 | Tool | Opis |
 |------|------|
 | `list_sites` | Lista sajtova kojima Iris ima pristup |
-| `list_site_files` | Vidi koje stranice postoje na sajtu |
-| `read_site_file` | Pročitaj HTML fajl ili sitemap.xml |
-| `write_site_file` | Upiši promjenu u fajl (auto backup .bak) |
-| `audit_seo_page` | SEO score jedne stranice — šta fali |
-| `audit_seo_site` | SEO audit cijelog sajta — sve stranice |
-| `add_schema` | Dodaj JSON-LD schema (LocalBusiness, FAQPage, Person, Organization...) |
-| `add_meta_tags` | Dodaj/ažuriraj meta tagove (description, og:title, og:image, canonical...) |
-| `update_sitemap` | Dodaj/ažuriraj URL-e u sitemap.xml |
-| `git_commit_deploy` | Commituj i deployjaj promjene |
-
-**Config (.env):**
-```env
-WEBOPS_SITES=[
-  {"domain":"digitalnature.at","webroot":"/var/www/digital-nature-website/html/html","git":"/var/www/digital-nature-website"},
-  {"domain":"matografie.at","webroot":"/var/www/mato-website/html","git":"/var/www/mato-website"}
-]
-```
+| `list_site_files` | Vidi koje stranice postoje |
+| `read_site_file` | Pročitaj HTML fajl |
+| `write_site_file` | Upiši promjenu (auto backup .bak) |
+| `audit_seo_page` / `audit_seo_site` | SEO audit |
+| `add_schema` | Dodaj JSON-LD schema |
+| `add_meta_tags` | Dodaj/ažuriraj meta tagove |
+| `update_sitemap` | Ažuriraj sitemap.xml |
+| `git_commit_deploy` | Commituj i deployjaj |
 
 ---
 
 ### 4. Infrastructure Monitoring
 
-Automatski monitoring svih live sajtova, SSL certifikata i servera.
-
 | Tool | Opis |
 |------|------|
-| `uptime_status` | Uptime % i response time za sajtove |
+| `uptime_status` | Uptime % i response time |
 | `ssl_status` | SSL certifikati i domain expiry |
-| `server_health` | CPU, RAM, disk, load avg, Docker containeri |
+| `server_health` | CPU, RAM, disk, load avg, Docker |
 
-**Automatski alertovi (Telegram):**
+**Monitoringuje:** digitalnature.at, matografie.at, veselko.at
 
-| Event | Trigger |
-|-------|---------|
-| 🔴 Sajt pao | Odmah na status promjenu |
-| 🟢 Sajt se vratio | Sa trajanjem downtime-a |
-| ⚠️ SSL istječe | 30, 14, 7, 1 dan ranije |
-| ⚠️ Domain istječe | 60, 30, 14, 7 dana ranije |
-| ⚠️ Disk > 80% | Max jednom svakih 2h |
-| 🔴 RAM > 90% | Max jednom svakih 2h |
+**Automatski alertovi:** sajt pao, SSL istječe (30/14/7/1d), disk > 80%, RAM > 90%
 
 ---
 
-### 5. Lead Tracker
+### 5. Docker Manager
+
+Upravljanje Docker containerima direktno iz Telegrama.
+
+| Tool | Opis |
+|------|------|
+| `docker_ps` | Lista svih containera + status |
+| `docker_logs` | Logovi containera (N linija) |
+| `docker_restart` / `docker_stop` / `docker_start` | Kontrola containera |
+| `docker_stats` | CPU/RAM po containeru |
+
+---
+
+### 6. Log Analyzer
+
+Automatska analiza Docker/nginx logova — detektira probleme.
+
+| Detekcija | Threshold |
+|-----------|-----------|
+| 5xx greške | Svaka pojava → alert |
+| 4xx spike | > 20 u periodu |
+| Spore stranice | > 3s response time |
+| Auth failures | > 10 u periodu |
+
+**Cron:** Svakih 15 minuta — check svih containera
+
+---
+
+### 7. Pre-Deploy Checker
+
+Automatska provjera sajta PRIJE deploya.
+
+| Provjera | Opis |
+|----------|------|
+| Broken links | Testira sve interne linkove |
+| Meta tagovi | `<title>`, `meta description` |
+| `<h1>` tag | Upozorenje ako nema |
+| Alt atributi | Slike bez alt |
+| Sitemap validacija | Validan XML |
+
+**Tool:** `precheck_site` — pokretati prije svakog deploya
+
+---
+
+### 8. Broken Link Scanner
+
+Tjedni automatski scan svih sajtova.
+
+- Crawla sve HTML fajlove
+- Testira interne linkove (HEAD request)
+- Šalje Telegram report sa listom 404 i timeout linkova
+
+**Cron:** Nedjelja 9:00
+
+---
+
+### 9. Form Monitor
+
+Dnevni test contact formi.
+
+- POST request na form endpoint
+- Provjera status koda
+- Alert na Telegram ako forma ne radi (12h cooldown)
+
+**Cron:** Svaki dan 10:00
+
+---
+
+### 10. Lead Tracker + Follow-up
 
 Bilježi upite sa digitalnature.at contact forme.
 
 | Tool | Opis |
 |------|------|
-| `list_leads` | Lista leadova, filter po statusu |
-| `get_lead` | Detalji leada |
-| `update_lead_status` | Promijeni status + bilješke |
-| `get_lead_stats` | Conversion rate, won/lost |
+| `list_leads` | Lista leadova |
+| `update_lead_status` | Promijeni status |
+| `get_lead_stats` | Conversion rate |
+| `lead_followup` | Podsjetnik za stale leadove |
 
 **Pipeline:** `new → contacted → negotiating → won / lost`
 
-**API endpoint:** `POST /api/lead` — prima JSON sa contact forme
+**Auto follow-up:** Svaki dan 9:00 — ako lead bez aktivnosti 5+ dana → Telegram alert
 
 ---
 
-### 6. Client CRM
-
-Centralni registar klijenata. Vezano za fakture, deploye, care plan, time tracker.
+### 11. Client CRM + Churn Predictor
 
 | Tool | Opis |
 |------|------|
-| `add_client` / `list_clients` / `get_client` / `update_client` | CRUD klijenata |
-| `get_client_stats` | MRR, broj po statusu i planu |
-| `add_client_note` / `add_project` | Bilješke i projekti |
+| `add_client` / `list_clients` / `update_client` | CRUD klijenata |
+| `churn_risks` | Scoring rizičnih klijenata |
 
-**Status:** `prospect → active → paused → churned`
-**Planovi:** `none / basic / pro / premium / custom`
+**Churn scoring:** nema fakture 60d (+2-3), bez kontakta 30d (+1-2), bez plana (+1)
 
 ---
 
-### 7. Care Plan Manager
-
-Praćenje aktivnosti za maintenance klijente — dokaz rada za naplatu.
+### 12. Care Plan Manager
 
 | Tool | Opis |
 |------|------|
-| `add_care_activity` | Logiraj aktivnost (update, fix, seo, content...) |
-| `mark_activity_done` | Označi kao završeno |
-| `get_care_summary` | Summary za klijenta za mjesec |
-| `list_care_clients` | Lista klijenata sa planom |
+| `add_care_activity` | Logiraj aktivnost |
+| `get_care_summary` | Summary za klijenta/mjesec |
 
-**Cron:** 1. u mjesecu 9:00 → billing reminders na Telegram
+**Cron:** 1. u mjesecu 9:00 → billing reminders
 
 ---
 
-### 8. Invoice Generator
-
-Auto-numeracija, vezano za CRM.
+### 13. Invoice Generator + Payment Reminders
 
 | Tool | Opis |
 |------|------|
-| `create_invoice` / `create_care_invoice` | Kreiraj fakturu |
-| `get_invoice` / `list_invoices` | Pregled faktura |
+| `create_invoice` | Kreiraj fakturu |
 | `update_invoice_status` | draft → sent → paid |
-| `get_invoice_stats` | Prihod, outstanding, po statusu |
+| `check_payments` | Provjeri overdue i pošalji remindere |
 
-**Format:** `DN-2026-001`, auto-increment po godini
-**Pipeline:** `draft → sent → paid / overdue`
+**Auto reminderi:** 3, 7, 14 dana nakon due_date
+
+**Format:** `DN-2026-001`
 
 ---
 
-### 9. Deploy Log
+### 14. Monthly Report
 
-Historija svih deployova.
+Automatski email klijentu 1. u mjesecu.
+
+**Sadržaj:** uptime %, deployi, care aktivnosti, PageSpeed score, SEO summary
+
+**Cron:** 1. u mjesecu 10:00
+
+> ⏳ Email šalje se tek kad se konfigurira SMTP
+
+---
+
+### 15. Time Tracker
 
 | Tool | Opis |
 |------|------|
-| `log_deploy` / `list_deploys` / `get_deploy_stats` | Deploy tracking |
+| `log_time` | Zabilježi sate |
+| `unbilled_hours` | Nefakturirani sati |
+| `mark_billed` | Označi kao fakturirano |
 
 ---
 
-### 10. Backup Verifikator
+### 16. Revenue Dashboard + Profit
 
 | Tool | Opis |
 |------|------|
-| `check_backups` / `check_single_backup` | Provjeri backup lokacije |
-
-**Cron:** 8:30 svaki dan → check + alert (12h cooldown)
-
----
-
-### 11. Competitor Keyword Tracker
-
-Pozicije za ključne riječi iz Search Console.
-
-| Tool | Opis |
-|------|------|
-| `check_keywords` / `keyword_positions` / `keyword_report` | Keyword tracking |
-
-**Cron:** Srijeda 9:00 → check + alert na promjene >= 1 pozicija
+| `revenue_dashboard` | MRR, pipeline, fakture, churn |
+| `profit_report` | Profit po klijentu — prihod, trošak (sati × €25), marža % |
+| `mrr_history` | MRR trend |
 
 ---
 
-### 12. Time Tracker
+### 17. Performance Tracker (PageSpeed)
 
-Logovanje sati rada po projektu/klijentu.
-
-| Tool | Opis |
-|------|------|
-| `log_time` | Zabilježi sate (project, hours, description, billable) |
-| `list_time` / `unbilled_hours` | Pregled i nefakturirani sati |
-| `mark_billed` / `time_stats` | Billing i statistika |
+**Cron:** Utorak 9:00 → check + alert ako score padne >= 10 bodova
 
 ---
 
-### 13. Revenue Dashboard
-
-Financijski pregled agencije.
-
-| Tool | Opis |
-|------|------|
-| `revenue_dashboard` | MRR, pipeline, fakture, conversion rate |
-| `mrr_history` | MRR trend kroz mjesece |
-| `pipeline_value` | Vrijednost otvorenih leadova |
-
-**MRR snapshot** sprema se svaki ponedjeljak automatski.
-
----
-
-### 14. Performance Tracker (PageSpeed)
-
-Google PageSpeed Insights score tracking za sve sajtove.
-
-| Tool | Opis |
-|------|------|
-| `perf_check` | Pokreni check (svi sajtovi ili jedan URL) |
-| `perf_scores` | Zadnji scorovi — Performance, Accessibility, SEO |
-| `perf_history` | Trend scorova za domenu |
-
-**Cron:** Utorak 9:00 → check svih sajtova, alert ako score padne >= 10 bodova
-
----
-
-### 15. Weekly Digest
+### 18. Weekly Digest
 
 Svaki ponedjeljak 7:00 — sve informacije u jednoj Telegram poruci.
-
-| Tool | Opis |
-|------|------|
-| `weekly_digest` | Generiši i pošalji digest odmah |
-
-**Sadržaj:** novi leadi, MRR, deployi ove sedmice, uptime status
 
 ---
 
@@ -424,27 +426,30 @@ Svaki ponedjeljak 7:00 — sve informacije u jednoj Telegram poruci.
 | Komanda | Opis |
 |---------|------|
 | `/status` | Uptime svih sajtova + server health |
-| `/seo` | Weekly SEO report odmah |
+| `/seo [domena]` | SEO report |
 | `/ssl` | SSL certifikati i domain expiry |
 | `/leads` | Lista novih upita |
 | `/health` | CPU/RAM/disk/Docker |
-| `/clients` | Lista aktivnih klijenata i MRR |
-| `/invoices` | Otvorene fakture i outstanding iznos |
+| `/clients` | Lista klijenata i MRR |
+| `/invoices` | Otvorene fakture |
 | `/deploys` | Zadnjih 10 deployova |
-| `/backups` | Status svih backup lokacija |
-| `/keywords` | Keyword pozicije za sve domene |
-| `/revenue` | Revenue dashboard — MRR, pipeline, fakture |
-| `/time` | Nefakturirani sati i statistika |
-| `/perf` | Performance scorovi za sve sajtove |
+| `/backups` | Status backupa |
+| `/keywords` | Keyword pozicije |
+| `/revenue` | Revenue dashboard |
+| `/time` | Nefakturirani sati |
+| `/perf` | Performance scorovi |
+| `/ps` | Docker containeri |
+| `/logs [container]` | Docker logovi |
+| `/payments` | Payment reminders |
 | `/digest` | Tjedni digest odmah |
+| `/forms` | Status contact formi |
+| `/links` | Broken link scan |
+| `/profit` | Profit po klijentu |
+| `/churn` | Churn risk klijenti |
+| `/followup` | Lead follow-up podsjetnici |
 | `/help` | Lista svih komandi |
 
-**Webhook:** `POST /telegram-webhook`
-
-**Setup (jednom nakon deploya):**
-```bash
-curl "https://api.telegram.org/bot{TOKEN}/setWebhook?url=https://iris.digitalnature.at/telegram-webhook"
-```
+**Slobodni chat:** Poruke bez `/` idu direktno Claude-u — puno AI s pristupom svim toolovima.
 
 ---
 
@@ -455,58 +460,47 @@ curl "https://api.telegram.org/bot{TOKEN}/setWebhook?url=https://iris.digitalnat
 | Weekly Digest + MRR snapshot | 07:00 ponedjeljak | Sve u jednoj poruci |
 | SEO report | 08:00 ponedjeljak | GA4 + Search Console |
 | Backup check | 08:30 svaki dan | Provjera backup lokacija |
-| SSL/domain check | 09:00 svaki dan | Certifikati i domain expiry |
-| Billing reminders | 09:00, 1. u mjesecu | MRR pregled care plan klijenata |
-| PageSpeed check | 09:00 utorak | Score tracking svih sajtova |
+| SSL/domain check | 09:00 svaki dan | Certifikati i expiry |
+| Lead follow-up | 09:00 svaki dan | Stale leadi (5+ dana) |
+| Billing reminders | 09:00, 1. u mj. | Care Plan klijenti |
+| PageSpeed check | 09:00 utorak | Score tracking |
 | Keyword check | 09:00 srijeda | Search Console pozicije |
+| Monthly report | 10:00, 1. u mj. | Email klijentima |
+| Form monitor | 10:00 svaki dan | Test contact formi |
 | Supplier sync | 06:00 svaki dan | Sync CSV feedova |
 | Daily summary | 07:00 svaki dan | Shop summary |
-| Uptime check | Svakih 5 min | HTTP check svih sajtova |
+| Uptime check | Svakih 5 min | HTTP check sajtova |
 | Server health | Svakih 30 min | CPU/RAM/disk alert |
+| Log analyzer | Svakih 15 min | Docker log parsing |
+| Link scanner | 09:00 nedjelja | Broken link scan |
 
 ---
 
-## Go-Live checklist
+## Go-Live status
 
-- [ ] `TELEGRAM_BOT_TOKEN` — BotFather: `/newbot`
-- [ ] `ADMIN_TELEGRAM_ID` — userinfobot u Telegram
-- [ ] `MONITOR_SITES` — lista domena za monitoring
-- [ ] `ANTHROPIC_API_KEY` — već postoji na serveru
-- [ ] `BACKUP_PATHS` — lista backup lokacija
-- [ ] `COMPETITOR_KEYWORDS` — domene i ključne riječi
-- [ ] `WEBOPS_SITES` — domene i webroot pathovi za SEO operacije
-- [ ] SMTP konfiguracija — za email automation
-- [ ] Google Cloud projekt + Service Account — za SEO modul (Faza 2)
-- [ ] Telegram webhook setup — `setup_telegram_webhook` tool
-- [ ] digitalnature.at contact forma → POST na `/api/lead`
-- [ ] Kreirati prve klijente u CRM (`add_client`)
-
----
-
-## Planirano (sljedeće)
-
-| Funkcija | Prioritet | Opis |
-|----------|-----------|------|
-| Auto Monthly Report | Visok | Iris šalje klijentu email izvještaj 1. u mj. |
-| Docker Manager | Visok | `/logs`, `/restart` containera via Telegram |
-| Log Analyzer | Visok | Nginx/Docker log parsing, alert na 500 greške |
-| Auto Invoice + Email | Visok | Automatska faktura + email klijentu na billing datum |
-| Project Tracker | Srednji | Kanban po projektu (todo/in-progress/review/done) |
-| Cloudflare Integration | Srednji | Cache purge, DNS, analytics |
-| Churn Alert | Srednji | Alert kad klijent dugo nije odgovorio |
-| Google My Business Monitor | Nizak | Alert na novu recenziju |
-| Testimonial Collector | Nizak | Auto-email klijentu nakon završetka projekta |
-| Contract Generator | Nizak | Ugovor iz CRM podataka |
+| Komponenta | Status |
+|-----------|--------|
+| Telegram bot | ✅ Aktivan — @iriskaadminka_bot |
+| AI chat (slobodni) | ✅ Aktivan |
+| Google OAuth2 | ✅ Konfiguriran |
+| SEO — digitalnature.at | ✅ GA4 + Search Console |
+| SEO — matografie.at | ✅ GA4 + Search Console |
+| Uptime monitoring | ✅ 3 sajta |
+| WEBOPS_SITES | ✅ 3 sajta |
+| Form monitor | ✅ digitalnature.at |
+| Docker manager | ✅ Aktivan |
+| SMTP email | ⏳ Nije konfigurirano |
+| Backup paths | ⏳ Nije konfigurirano |
+| Competitor keywords | ⏳ Nije konfigurirano |
 
 ---
 
 ## Iris Widget (B2B Produkt)
 
-Odvojen produkt od Iris Admin Bota. Customer-facing chatbot za klijente Digital Nature.
+Odvojen produkt. Customer-facing chatbot za klijente Digital Nature.
 
-- Svaki klijent dobija vlastiti Docker container
-- Custom persona, knowledge base, branding
-- Embed via `<script>` tag na klijentovoj stranici
-- Pilot klijent: Mato Davidovic (matografie.at)
+- Embed via `<script>` tag
+- Svaki klijent: vlastiti Docker container, custom persona
+- Pilot: Mato Davidovic (matografie.at)
 
 Dokumentacija: `iris-widget/` repo (odvojen)
