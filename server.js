@@ -21,7 +21,7 @@ import { logDeploy, listDeploys, getLastDeploy, getDeployStats, notifyDeploy, fo
 import { checkAllBackups, checkSingleBackup, formatBackupReport } from './backup.js';
 import { fetchKeywordPositions, checkAllKeywords, getCurrentPositions, formatKeywordReport, formatChangesAlert } from './competitor.js';
 import { sendWeeklyDigest, buildWeeklyDigest } from './digest.js';
-import { listSites, readSiteFile, writeSiteFile, listSiteFiles, auditSeoPage, auditSeoSite, addJsonLdSchema, addOrUpdateMetaTags, updateSitemap, gitCommitAndDeploy, formatSeoAudit } from './webops.js';
+import { listSites, readSiteFile, writeSiteFile, deleteSiteFile, listSiteFiles, auditSeoPage, auditSeoSite, addJsonLdSchema, addOrUpdateMetaTags, updateSitemap, gitCommitAndDeploy, formatSeoAudit } from './webops.js';
 import { logTime, listTimeEntries, getMonthSummary as getTimeSummary, getUnbilledSummary, markAsBilled, getTimeStats, formatUnbilledSummary, formatMonthSummary as formatTimeSummary } from './timetrack.js';
 import { checkAllSites as checkAllPageSpeed, getAllLatestScores, getScoreHistory, formatPerfReport } from './pagespeed.js';
 import { getRevenueDashboard, formatRevenueDashboard, saveMrrSnapshot, getMrrHistory, getPipelineValue, getProfitPerClient, formatProfitReport } from './revenue.js';
@@ -1414,6 +1414,18 @@ const ADMIN_TOOLS = [
     }
   },
   {
+    name: 'delete_site_file',
+    description: 'Obriši fajl sa sajta. DOZVOLJENO samo za backup/test fajlove (mora sadržavati: backup, BACKUP, ORIGINAL, -test, -preview, .bak u imenu). Kritični fajlovi su zaštićeni.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'Domena sajta' },
+        path:   { type: 'string', description: 'Path do fajla koji se briše' }
+      },
+      required: ['domain', 'path']
+    }
+  },
+  {
     name: 'audit_seo_page',
     description: 'Provjeri SEO jedne stranice — šta fali (title, meta description, canonical, og tags, schema, h1, alt tagovi).',
     input_schema: {
@@ -2641,6 +2653,9 @@ async function handleAdminTool(name, input) {
 
     case 'write_site_file':
       return writeSiteFile(input.domain, input.path, input.content);
+
+    case 'delete_site_file':
+      return deleteSiteFile(input.domain, input.path);
 
     case 'audit_seo_page': {
       const audit = auditSeoPage(input.domain, input.path);
