@@ -18,11 +18,9 @@ function allowed(name) {
 }
 
 function run(cmd, timeout = 10000) {
-  try {
-    return { ok: true, output: execSync(cmd, { timeout }).toString().trim() };
-  } catch (e) {
-    return { ok: false, error: e.message.split('\n')[0] };
-  }
+  // Docker upravljanje je uklonjeno iz bota — container nema docker binary,
+  // pa je izvršavanje onemogućeno da ne spama logove ("docker: not found").
+  return { ok: false, error: 'Docker upravljanje je uklonjeno iz bota.' };
 }
 
 // ── Core ──────────────────────────────────────────────────────────────────────

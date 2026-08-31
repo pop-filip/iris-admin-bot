@@ -1510,69 +1510,6 @@ const ADMIN_TOOLS = [
     }
   },
 
-  // ── Docker Manager ────────────────────────────────────────────────────────
-  {
-    name: 'docker_ps',
-    description: 'Lista svih Docker containera — status, image, portovi.',
-    input_schema: { type: 'object', properties: {} }
-  },
-  {
-    name: 'docker_logs',
-    description: 'Prikaži logove Docker containera.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        container: { type: 'string', description: 'Naziv containera' },
-        lines:     { type: 'number', description: 'Broj linija (default: 50)' }
-      },
-      required: ['container']
-    }
-  },
-  {
-    name: 'docker_restart',
-    description: 'Restartuj Docker container.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        container: { type: 'string', description: 'Naziv containera' }
-      },
-      required: ['container']
-    }
-  },
-  {
-    name: 'docker_stop',
-    description: 'Zaustavi Docker container.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        container: { type: 'string', description: 'Naziv containera' }
-      },
-      required: ['container']
-    }
-  },
-  {
-    name: 'docker_start',
-    description: 'Pokreni Docker container.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        container: { type: 'string', description: 'Naziv containera' }
-      },
-      required: ['container']
-    }
-  },
-  {
-    name: 'docker_stats',
-    description: 'CPU i RAM usage jednog Docker containera.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        container: { type: 'string', description: 'Naziv containera' }
-      },
-      required: ['container']
-    }
-  },
-
   // ── Log Analyzer ──────────────────────────────────────────────────────────
   {
     name: 'analyze_logs',
@@ -2687,27 +2624,6 @@ async function handleAdminTool(name, input) {
       return result;
     }
 
-    // ── Docker Manager ───────────────────────────────────────────────────────
-    case 'docker_ps':
-      return { report: formatContainerList(), containers: listContainers() };
-
-    case 'docker_logs': {
-      const result = getContainerLogs(input.container, input.lines || 50);
-      return { ...result, report: formatLogs(result) };
-    }
-
-    case 'docker_restart':
-      return restartContainer(input.container);
-
-    case 'docker_stop':
-      return stopContainer(input.container);
-
-    case 'docker_start':
-      return startContainer(input.container);
-
-    case 'docker_stats':
-      return getContainerStats(input.container);
-
     // ── Log Analyzer ─────────────────────────────────────────────────────────
     case 'analyze_logs': {
       if (input.container) {
@@ -3478,17 +3394,6 @@ registerCommand('invoices', 'Financijski pregled faktura', async () => {
   );
 });
 
-
-registerCommand('ps', 'Lista Docker containera', async () => {
-  await sendTelegram(formatContainerList());
-});
-
-registerCommand('logs', 'Logovi Docker containera — /logs [container]', async (args) => {
-  const container = args?.trim();
-  if (!container) return sendTelegram('Korištenje: /logs [naziv-containera]');
-  const result = getContainerLogs(container, 30);
-  await sendTelegram(formatLogs(result, 20));
-});
 
 registerCommand('payments', 'Provjeri i pošalji payment reminders', async () => {
   const results = await checkPaymentReminders();
