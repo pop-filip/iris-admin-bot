@@ -6,10 +6,20 @@
  *   curl "https://api.telegram.org/bot{TOKEN}/setWebhook?url=https://iris.digitalnature.at/telegram-webhook"
  */
 
+import { timingSafeEqual } from 'crypto';
 import { sendTelegram } from './notify.js';
 
-const BOT_TOKEN  = process.env.TELEGRAM_BOT_TOKEN;
-const ADMIN_CHAT = process.env.ADMIN_TELEGRAM_ID;
+const BOT_TOKEN      = process.env.TELEGRAM_BOT_TOKEN;
+const ADMIN_CHAT     = process.env.ADMIN_TELEGRAM_ID;
+// Telegram šalje ovo u X-Telegram-Bot-Api-Secret-Token — bez njega je webhook laživ
+const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+
+function isValidSecret(header) {
+  if (!WEBHOOK_SECRET || typeof header !== 'string') return false;
+  const a = Buffer.from(header);
+  const b = Buffer.from(WEBHOOK_SECRET);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
 
 // AI chat handler — postavlja server.js pri startup
 let _aiChatHandler = null;
@@ -123,6 +133,9 @@ export function getHelp() {
 
 export function registerTelegramWebhook(app) {
   app.post('/telegram-webhook', async (req, res) => {
+    if (!isValidSecret(req.get('X-Telegram-Bot-Api-Secret-Token'))) {
+      return res.sendStatus(401);
+    }
     res.sendStatus(200); // Telegram zahtjeva brz 200 response
     try {
       await handleTelegramUpdate(req.body);
@@ -139,6 +152,7 @@ export function registerTelegramWebhook(app) {
  */
 export async function setupWebhook(baseUrl) {
   if (!BOT_TOKEN) return { ok: false, error: 'TELEGRAM_BOT_TOKEN nije konfiguriran' };
+  if (!WEBHOOK_SECRET) return { ok: false, error: 'TELEGRAM_WEBHOOK_SECRET nije konfiguriran' };
   const webhookUrl = `${baseUrl}/telegram-webhook`;
   try {
     const res = await fetch(
@@ -146,7 +160,7 @@ export async function setupWebhook(baseUrl) {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: webhookUrl, allowed_updates: ['message'] }),
+        body: JSON.stringify({ url: webhookUrl, allowed_updates: ['message'], secret_token: WEBHOOK_SECRET }),
       }
     );
     const data = await res.json();

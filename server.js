@@ -55,6 +55,7 @@ const corsOrigins = [
 ];
 
 // ── Middleware ────────────────────────────────────────────────────────────────
+app.set('trust proxy', 1); // iza Traefika — rate limit po stvarnoj IP, ne po Traefik IP
 app.use(express.json({ limit: '10kb' }));
 app.use(cors({ origin: corsOrigins }));
 
@@ -64,6 +65,15 @@ const limiter = rateLimit({
   message: { error: 'Zu viele Anfragen. Bitte warten Sie eine Minute.' }
 });
 app.use('/api/chat', limiter);
+
+// Brute-force zaštita admin lozinke — broje se samo neuspjeli pokušaji
+const adminLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  skipSuccessfulRequests: true,
+  message: { error: 'Previše neuspjelih pokušaja. Pokušaj za 15 minuta.' }
+});
+app.use('/api/admin', adminLimiter);
 
 // ── Tools (Claude Tool Use) ───────────────────────────────────────────────────
 const TOOLS = [
@@ -3320,6 +3330,11 @@ registerHealthEndpoint(app);
 app.post('/api/lead', async (req, res) => {
   const { name, email, phone, message, source, budget, service } = req.body;
   if (!email) return res.status(400).json({ error: 'Email je obavezan.' });
+
+  // Form monitor test — potvrdi da endpoint radi, ali ne pravi lead (inače follow-up spam)
+  if (req.get('X-Monitor') === 'iris-formcheck' || req.body._monitor === true) {
+    return res.json({ ok: true, monitor: true });
+  }
 
   try {
     const lead = addLead({ name, email, phone, message, source, budget, service });
