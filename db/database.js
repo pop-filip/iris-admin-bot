@@ -144,6 +144,22 @@ function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_refunds_order  ON refunds(order_number);
     CREATE INDEX IF NOT EXISTS idx_refunds_status ON refunds(status);
   `);
+
+  // CREATE TABLE IF NOT EXISTS ne dodaje nove kolone u postojeće baze — migriraj ručno
+  const migrations = {
+    products: {
+      buy_price: 'REAL', featured: 'INTEGER DEFAULT 0', image_url: 'TEXT', supplier_id: 'INTEGER',
+      weight_kg: 'REAL', hazmat: 'INTEGER DEFAULT 0', hazmat_note: 'TEXT', position: 'TEXT',
+      year_from: 'INTEGER', year_to: 'INTEGER',
+    },
+    suppliers: { feed_url: 'TEXT', feed_path: 'TEXT', last_sync: 'TEXT' },
+  };
+  for (const [table, cols] of Object.entries(migrations)) {
+    const existing = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name));
+    for (const [col, type] of Object.entries(cols)) {
+      if (!existing.has(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+    }
+  }
 }
 
 // Pretraži proizvode — full text search + filteri
